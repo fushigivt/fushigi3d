@@ -291,6 +291,10 @@ async fn run_audio_pipeline(state: Arc<AppState>) -> anyhow::Result<()> {
             result = pipeline.process() => {
                 match result {
                     Ok(is_speaking) => {
+                        // Publish audio levels for UI display
+                        let activity = pipeline.get_activity();
+                        state.set_audio_levels(activity.energy_db, activity.confidence);
+
                         let current = state.get_avatar_state().await;
                         // Only update if speaking state changed
                         if is_speaking != current.is_speaking() {

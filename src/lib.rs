@@ -20,7 +20,7 @@ pub mod ui;
 pub use config::Config;
 pub use error::{Result, Fushigi3dError};
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock, Notify};
 
@@ -45,6 +45,10 @@ pub struct AppState {
     pub obs_reconnect: Notify,
     /// Config changed signal
     pub config_changed: Notify,
+    /// Audio energy level in dB (stored as f32 bits in AtomicU32)
+    pub audio_energy_db: AtomicU32,
+    /// VAD confidence (0.0–1.0, stored as f32 bits in AtomicU32)
+    pub audio_vad_confidence: AtomicU32,
 }
 
 impl AppState {
@@ -64,6 +68,8 @@ impl AppState {
             obs_scenes: RwLock::new(Vec::new()),
             obs_reconnect: Notify::new(),
             config_changed: Notify::new(),
+            audio_energy_db: AtomicU32::new(f32::to_bits(-100.0)),
+            audio_vad_confidence: AtomicU32::new(f32::to_bits(0.0)),
         })
     }
 
@@ -123,6 +129,22 @@ impl AppState {
     /// Wait for config change signal
     pub async fn wait_config_changed(&self) {
         self.config_changed.notified().await;
+    }
+
+    /// Update audio level metrics from the audio pipeline
+    pub fn set_audio_levels(&self, energy_db: f32, confidence: f32) {
+        self.audio_energy_db.store(f32::to_bits(energy_db), Ordering::Relaxed);
+        self.audio_vad_confidence.store(f32::to_bits(confidence), Ordering::Relaxed);
+    }
+
+    /// Get the current audio energy level in dB
+    pub fn get_audio_energy_db(&self) -> f32 {
+        f32::from_bits(self.audio_energy_db.load(Ordering::Relaxed))
+    }
+
+    /// Get the current VAD confidence (0.0–1.0)
+    pub fn get_audio_vad_confidence(&self) -> f32 {
+        f32::from_bits(self.audio_vad_confidence.load(Ordering::Relaxed))
     }
 }
 
