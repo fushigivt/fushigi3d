@@ -153,25 +153,3 @@ blend_with_vad = true
 auto_restart = true
 # Delay before restarting crashed subprocess (seconds)
 restart_delay_secs = 3
-
-[integration]
-# Integration mode: "standalone", "media", "ai", or "full"
-mode = "standalone"
-
-[integration.media]
-# secretary-media service URL
-url = "http://localhost:8081"
-# Enable TTS synthesis
-enable_tts = false
-# TTS voice selection
-tts_voice = "alloy"
-# Use remote VAD processing
-use_remote_vad = false
-
-[integration.ai]
-# secretary_rust AI service URL
-url = "http://localhost:8080"
-# Agent ID for personality
-# agent_id = "vtuber-personality"
-# Enable chat responses
-enable_responses = false

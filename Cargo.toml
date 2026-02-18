@@ -5,7 +5,7 @@ edition = "2021"
 description = "Headless VTuber/PNGTuber service for Linux"
 authors = ["Rustuber Contributors"]
 license = "AGPL-3.0-only"
-repository = "https://github.com/fushigivt/fushigi3d"
+repository = ""
 
 [dependencies]
 
@@ -42,6 +42,10 @@ reqwest = { version = "0.12", features = ["json"] }
 # Image
 image = "0.25"
 
+# Native UI (optional)
+eframe = { version = "0.31", optional = true, default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
+egui_extras = { version = "0.31", optional = true, features = ["image"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -67,6 +71,7 @@ tempfile = "3"
 
 [features]
 default = []
+native-ui = ["eframe", "egui_extras"]
 
 [profile.release]
 lto = true

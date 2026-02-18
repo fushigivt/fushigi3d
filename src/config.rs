@@ -1,10 +1,10 @@
-//! Configuration parsing and management for Rustuber
+//! Configuration parsing and management for Fushigi3D
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::error::{ConfigError, RustuberError};
+use crate::error::{ConfigError, Fushigi3dError};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,7 +18,6 @@ pub struct Config {
     pub vmc: VmcConfig,
     pub osf: OsfConfig,
     pub mediapipe: MediaPipeConfig,
-    pub integration: IntegrationConfig,
 }
 
 impl Default for Config {
@@ -32,7 +31,6 @@ impl Default for Config {
             vmc: VmcConfig::default(),
             osf: OsfConfig::default(),
             mediapipe: MediaPipeConfig::default(),
-            integration: IntegrationConfig::default(),
         }
     }
 }
@@ -203,8 +201,6 @@ pub enum VadProvider {
     WebRtc,
     /// Simple energy-based detection
     Energy,
-    /// Remote VAD via secretary-media
-    Remote,
 }
 
 impl Default for VadProvider {
@@ -487,94 +483,6 @@ impl Default for MediaPipeConfig {
 }
 
 /// Integration configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct IntegrationConfig {
-    /// Integration mode: "standalone", "media", "ai", "full"
-    pub mode: IntegrationMode,
-    /// secretary-media configuration
-    pub media: MediaIntegrationConfig,
-    /// secretary_rust AI configuration
-    pub ai: AiIntegrationConfig,
-}
-
-impl Default for IntegrationConfig {
-    fn default() -> Self {
-        Self {
-            mode: IntegrationMode::Standalone,
-            media: MediaIntegrationConfig::default(),
-            ai: AiIntegrationConfig::default(),
-        }
-    }
-}
-
-/// Integration mode selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum IntegrationMode {
-    /// Fully standalone operation
-    Standalone,
-    /// Integrate with secretary-media only
-    Media,
-    /// Integrate with secretary_rust AI only
-    Ai,
-    /// Full integration with both services
-    Full,
-}
-
-impl Default for IntegrationMode {
-    fn default() -> Self {
-        Self::Standalone
-    }
-}
-
-/// secretary-media integration configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MediaIntegrationConfig {
-    /// Media service URL
-    pub url: String,
-    /// Enable TTS synthesis
-    pub enable_tts: bool,
-    /// TTS voice selection
-    pub tts_voice: String,
-    /// Use remote VAD
-    pub use_remote_vad: bool,
-}
-
-impl Default for MediaIntegrationConfig {
-    fn default() -> Self {
-        Self {
-            url: "http://localhost:8081".to_string(),
-            enable_tts: false,
-            tts_voice: "alloy".to_string(),
-            use_remote_vad: false,
-        }
-    }
-}
-
-/// secretary_rust AI integration configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AiIntegrationConfig {
-    /// AI service URL
-    pub url: String,
-    /// Agent ID for personality
-    pub agent_id: Option<String>,
-    /// Enable chat responses
-    pub enable_responses: bool,
-}
-
-impl Default for AiIntegrationConfig {
-    fn default() -> Self {
-        Self {
-            url: "http://localhost:8080".to_string(),
-            agent_id: None,
-            enable_responses: false,
-        }
-    }
-}
-
 /// Get the platform-specific configuration directory
 fn dirs_path() -> PathBuf {
     #[cfg(target_os = "linux")]
