@@ -51,6 +51,9 @@ gltf = { version = "1", optional = true, features = ["extras"] }
 glam = { version = "0.29", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 
+# Theming (optional, used with native-ui)
+catppuccin-egui = { version = "5.5", optional = true, default-features = false, features = ["egui31"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -76,7 +79,7 @@ tempfile = "3"
 
 [features]
 default = []
-native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck"]
+native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui"]
 
 [profile.release]
 lto = true

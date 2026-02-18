@@ -49,6 +49,8 @@ pub struct RustuberApp {
     start_time: Instant,
     /// Error message if model failed to load
     load_error: Option<String>,
+    /// Active catppuccin theme flavor
+    theme: catppuccin_egui::Theme,
 }
 
 impl RustuberApp {
@@ -90,6 +92,7 @@ impl RustuberApp {
             mapper: None,
             start_time,
             load_error: None,
+            theme: catppuccin_egui::LATTE,
         };
 
         // Try to load VRM model and initialize renderer
@@ -223,7 +226,7 @@ impl RustuberApp {
         let asset_manager = match &self.asset_manager {
             Some(am) => am,
             None => {
-                ui.colored_label(egui::Color32::RED, "No assets loaded");
+                ui.colored_label(self.theme.red, "No assets loaded");
                 return;
             }
         };
@@ -267,7 +270,7 @@ impl RustuberApp {
                     }
                     Err(e) => {
                         ui.colored_label(
-                            egui::Color32::RED,
+                            self.theme.red,
                             format!("Failed to decode image '{}': {}", resolved_key, e),
                         );
                         return;
@@ -275,7 +278,7 @@ impl RustuberApp {
                 },
                 Err(e) => {
                     ui.colored_label(
-                        egui::Color32::RED,
+                        self.theme.red,
                         format!("Failed to load asset '{}': {}", resolved_key, e),
                     );
                     return;
@@ -358,6 +361,10 @@ impl RustuberApp {
 
 impl eframe::App for RustuberApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Apply catppuccin theme
+        catppuccin_egui::set_theme(ctx, self.theme);
+        let theme = self.theme; // Copy for use inside closures
+
         // Drain latest state from broadcast channel
         self.update_cached_state();
 
@@ -389,6 +396,17 @@ impl eframe::App for RustuberApp {
 
             ui.separator();
 
+            // Theme flavor picker
+            ui.horizontal(|ui| {
+                ui.label("Theme:");
+                ui.selectable_value(&mut self.theme, catppuccin_egui::LATTE, "Latte");
+                ui.selectable_value(&mut self.theme, catppuccin_egui::FRAPPE, "Frappe");
+                ui.selectable_value(&mut self.theme, catppuccin_egui::MACCHIATO, "Macchiato");
+                ui.selectable_value(&mut self.theme, catppuccin_egui::MOCHA, "Mocha");
+            });
+
+            ui.separator();
+
             // OBS status
             let obs_connected = self
                 .state
@@ -397,9 +415,9 @@ impl eframe::App for RustuberApp {
             ui.horizontal(|ui| {
                 ui.label("OBS:");
                 if obs_connected {
-                    ui.colored_label(egui::Color32::GREEN, "connected");
+                    ui.colored_label(theme.green, "connected");
                 } else {
-                    ui.colored_label(egui::Color32::RED, "disconnected");
+                    ui.colored_label(theme.red, "disconnected");
                 }
             });
 
@@ -431,9 +449,9 @@ impl eframe::App for RustuberApp {
             // Map dB to 0.0–1.0 for the bar: -100 dB → 0.0, 0 dB → 1.0
             let level_frac = ((energy_db + 100.0) / 100.0).clamp(0.0, 1.0);
             let bar_color = if avatar.is_speaking() {
-                egui::Color32::from_rgb(80, 200, 80)
+                theme.green
             } else {
-                egui::Color32::from_rgb(80, 80, 200)
+                theme.blue
             };
             let bar_width = ui.available_width();
             let (bar_rect, _) = ui.allocate_exact_size(
@@ -443,7 +461,7 @@ impl eframe::App for RustuberApp {
             ui.painter().rect_filled(
                 bar_rect,
                 2.0,
-                egui::Color32::from_gray(40),
+                theme.surface0,
             );
             let filled = egui::Rect::from_min_size(
                 bar_rect.min,
@@ -454,7 +472,7 @@ impl eframe::App for RustuberApp {
             ui.horizontal(|ui| {
                 ui.label("Speaking:");
                 if avatar.is_speaking() {
-                    ui.colored_label(egui::Color32::GREEN, "yes");
+                    ui.colored_label(theme.green, "yes");
                 } else {
                     ui.label("no");
                 }
@@ -468,7 +486,7 @@ impl eframe::App for RustuberApp {
 
             if let Some(ref err) = self.load_error {
                 ui.separator();
-                ui.colored_label(egui::Color32::RED, err);
+                ui.colored_label(theme.red, err);
             }
         });
 
@@ -495,7 +513,7 @@ impl eframe::App for RustuberApp {
                     } else {
                         ui.heading("Avatar Preview");
                         if let Some(ref err) = self.load_error {
-                            ui.colored_label(egui::Color32::RED, err);
+                            ui.colored_label(theme.red, err);
                         } else {
                             ui.label("Loading VRM model...");
                         }
