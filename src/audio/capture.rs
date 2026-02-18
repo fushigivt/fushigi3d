@@ -212,6 +212,87 @@ fn build_input_stream(
             err_fn,
             None,
         ),
+        cpal::SampleFormat::U8 => device.build_input_stream(
+            config,
+            move |data: &[u8], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data
+                    .iter()
+                    .map(|&s| (s as f32 / 128.0) - 1.0)
+                    .collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I8 => device.build_input_stream(
+            config,
+            move |data: &[i8], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data
+                    .iter()
+                    .map(|&s| s as f32 / i8::MAX as f32)
+                    .collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I32 => device.build_input_stream(
+            config,
+            move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data
+                    .iter()
+                    .map(|&s| s as f32 / i32::MAX as f32)
+                    .collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::F64 => device.build_input_stream(
+            config,
+            move |data: &[f64], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data.iter().map(|&s| s as f32).collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::U32 => device.build_input_stream(
+            config,
+            move |data: &[u32], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data
+                    .iter()
+                    .map(|&s| (s as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32)
+                    .collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I64 => device.build_input_stream(
+            config,
+            move |data: &[i64], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data
+                    .iter()
+                    .map(|&s| (s as f64 / i64::MAX as f64) as f32)
+                    .collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::U64 => device.build_input_stream(
+            config,
+            move |data: &[u64], _: &cpal::InputCallbackInfo| {
+                let samples: Vec<f32> = data
+                    .iter()
+                    .map(|&s| (s as f64 / u64::MAX as f64 * 2.0 - 1.0) as f32)
+                    .collect();
+                let _ = tx.try_send(samples);
+            },
+            err_fn,
+            None,
+        ),
         _ => {
             return Err(AudioError::UnsupportedConfig(format!(
                 "Unsupported sample format: {:?}",
