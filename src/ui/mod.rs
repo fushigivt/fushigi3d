@@ -8,6 +8,12 @@
 //!
 //! Enabled via `--features native-ui`.
 
+mod animation;
 mod app;
+mod blendshape_map;
+mod renderer;
+mod skinning;
+mod viewport;
+mod vrm_loader;
 
 pub use app::RustuberApp;

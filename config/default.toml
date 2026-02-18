@@ -2,6 +2,8 @@
 # Copy this file to config.toml and modify as needed
 
 [audio]
+# Enable audio capture and VAD
+enabled = true
 # Audio device name or "default" to use system default
 device = "default"
 # Sample rate in Hz (16000 is optimal for VAD)
@@ -46,6 +48,11 @@ happy = "expressions/happy.png"
 surprised = "expressions/surprised.png"
 sad = "expressions/sad.png"
 angry = "expressions/angry.png"
+
+# VRM 3D model configuration
+[avatar.vrm]
+# Path to the VRM/GLB model file
+model_path = "assets/default/model.glb"
 
 [obs]
 # Enable OBS WebSocket integration

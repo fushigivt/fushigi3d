@@ -66,7 +66,8 @@ impl MpData {
             .with_mouth_open(mouth_open)
             .with_blink(blink)
             .with_head_position(pkt.head_position)
-            .with_head_rotation(pkt.head_rotation);
+            .with_head_rotation(pkt.head_rotation)
+            .with_blendshapes(pkt.blendshapes.clone());
 
         if !blend_with_vad {
             state = state.with_speaking(mouth_open > 0.15);

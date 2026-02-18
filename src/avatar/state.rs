@@ -1,6 +1,7 @@
 //! Avatar state machine
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// The type of avatar state
@@ -48,6 +49,9 @@ pub struct AvatarState {
     head_position: [f32; 3],
     /// Head rotation (pitch, yaw, roll) in degrees
     head_rotation: [f32; 3],
+    /// Full ARKit blendshape map (used for VRM morph targets)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    blendshapes: HashMap<String, f32>,
     /// Timestamp of last state change (not serialized)
     #[serde(skip)]
     last_change: Option<Instant>,
@@ -63,6 +67,7 @@ impl Default for AvatarState {
             blink: 0.0,
             head_position: [0.0, 0.0, 0.0],
             head_rotation: [0.0, 0.0, 0.0],
+            blendshapes: HashMap::new(),
             last_change: Some(Instant::now()),
         }
     }
@@ -116,6 +121,11 @@ impl AvatarState {
     /// Get the head rotation
     pub fn head_rotation(&self) -> [f32; 3] {
         self.head_rotation
+    }
+
+    /// Get the full blendshape map
+    pub fn blendshapes(&self) -> &HashMap<String, f32> {
+        &self.blendshapes
     }
 
     /// Get duration since last state change
@@ -178,6 +188,12 @@ impl AvatarState {
     /// Create a new state with head rotation
     pub fn with_head_rotation(mut self, rotation: [f32; 3]) -> Self {
         self.head_rotation = rotation;
+        self
+    }
+
+    /// Create a new state with full blendshape map
+    pub fn with_blendshapes(mut self, blendshapes: HashMap<String, f32>) -> Self {
+        self.blendshapes = blendshapes;
         self
     }
 

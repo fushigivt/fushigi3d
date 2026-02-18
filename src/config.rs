@@ -136,6 +136,8 @@ impl Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioConfig {
+    /// Enable audio capture
+    pub enabled: bool,
     /// Audio device name or "default"
     pub device: String,
     /// Sample rate in Hz
@@ -149,6 +151,7 @@ pub struct AudioConfig {
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             device: "default".to_string(),
             sample_rate: 16000,
             channels: 1,
@@ -223,6 +226,24 @@ pub struct AvatarConfig {
     pub states: HashMap<String, String>,
     /// Expression to image mapping
     pub expressions: HashMap<String, String>,
+    /// VRM 3D model configuration
+    pub vrm: VrmConfig,
+}
+
+/// VRM 3D model rendering configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VrmConfig {
+    /// Path to the VRM/GLB model file
+    pub model_path: String,
+}
+
+impl Default for VrmConfig {
+    fn default() -> Self {
+        Self {
+            model_path: "assets/default/model.glb".to_string(),
+        }
+    }
 }
 
 impl Default for AvatarConfig {
@@ -244,6 +265,7 @@ impl Default for AvatarConfig {
             assets_dir: PathBuf::from("./assets/default"),
             states,
             expressions,
+            vrm: VrmConfig::default(),
         }
     }
 }

@@ -5,8 +5,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::signal;
-use tracing::{error, info, Level};
+use tracing::{error, info, warn, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use rustuber::{
@@ -47,6 +46,10 @@ struct Args {
     #[arg(long)]
     no_obs: bool,
 
+    /// Disable audio capture
+    #[arg(long)]
+    no_audio: bool,
+
     /// Disable HTTP server
     #[arg(long)]
     no_http: bool,
@@ -54,10 +57,14 @@ struct Args {
     /// HTTP server port (overrides config)
     #[arg(short, long)]
     port: Option<u16>,
+
+    /// Launch native UI window
+    #[cfg(feature = "native-ui")]
+    #[arg(long)]
+    ui: bool,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Initialize logging
@@ -88,6 +95,53 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Build tokio runtime manually so the main thread stays free for the UI event loop
+    let runtime = tokio::runtime::Runtime::new()?;
+
+    // Do all async setup on the runtime
+    let state = runtime.block_on(async {
+        setup_and_spawn_services(&args).await
+    })?;
+
+    // If UI requested, run eframe on the main thread (blocks until window closes)
+    #[cfg(feature = "native-ui")]
+    if args.ui {
+        info!("Launching native UI window");
+        let ui_state = Arc::clone(&state);
+
+        // Enter the tokio runtime context so try_current() works inside eframe
+        // (needed for reading config via tokio::sync::RwLock in init_vrm)
+        let _guard = runtime.enter();
+
+        // eframe::run_native blocks the main thread (winit requirement)
+        if let Err(e) = rustuber::ui::RustuberApp::run(ui_state) {
+            error!("UI error: {}", e);
+        }
+
+        info!("UI window closed, shutting down");
+        state.shutdown();
+
+        // Give async tasks a moment to finish
+        runtime.shutdown_timeout(std::time::Duration::from_secs(3));
+        return Ok(());
+    }
+
+    // Headless mode: wait for Ctrl+C / SIGTERM
+    runtime.block_on(async {
+        shutdown_signal().await;
+        info!("Shutdown signal received");
+        state.shutdown();
+
+        // Give tasks a moment to clean up
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    });
+
+    info!("Rustuber stopped");
+    Ok(())
+}
+
+/// Setup config, create AppState, and spawn all background services.
+async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> {
     // Load configuration
     let mut config = if let Some(ref path) = args.config {
         Config::from_file(path)?
@@ -101,6 +155,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if args.no_obs {
         config.obs.enabled = false;
+    }
+    if args.no_audio {
+        config.audio.enabled = false;
     }
     if args.no_http {
         config.http.enabled = false;
@@ -120,36 +177,34 @@ async fn main() -> anyhow::Result<()> {
     // Create shared application state
     let state = AppState::new(config.clone());
 
-    // Start components
-    let mut handles = Vec::new();
-
     // Start audio pipeline
-    let audio_state = Arc::clone(&state);
-    let audio_handle = tokio::spawn(async move {
-        if let Err(e) = run_audio_pipeline(audio_state).await {
-            error!("Audio pipeline error: {}", e);
-        }
-    });
-    handles.push(audio_handle);
+    if config.audio.enabled {
+        let audio_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(e) = run_audio_pipeline(audio_state).await {
+                error!("Audio pipeline error: {}", e);
+            }
+        });
+    } else {
+        info!("Audio disabled");
+    }
 
-    // Start OBS client (handles enabled/disabled state internally)
+    // Start OBS client
     let obs_state = Arc::clone(&state);
-    let obs_handle = tokio::spawn(async move {
+    tokio::spawn(async move {
         if let Err(e) = run_obs_client(obs_state).await {
             error!("OBS client error: {}", e);
         }
     });
-    handles.push(obs_handle);
 
     // Start HTTP server if enabled
     if config.http.enabled {
         let http_state = Arc::clone(&state);
-        let http_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             if let Err(e) = run_http_server(http_state).await {
                 error!("HTTP server error: {}", e);
             }
         });
-        handles.push(http_handle);
     }
 
     // Auto-detect MediaPipe if no tracker is explicitly enabled
@@ -158,7 +213,6 @@ async fn main() -> anyhow::Result<()> {
             info!("No tracker enabled — MediaPipe detected, auto-enabling");
             config.mediapipe.enabled = true;
             config.mediapipe.auto_launch = true;
-            // Update the shared config
             let state_inner = Arc::clone(&state);
             let mp_config = config.mediapipe.clone();
             {
@@ -171,50 +225,34 @@ async fn main() -> anyhow::Result<()> {
     // Start OpenSeeFace tracking if enabled
     if config.osf.enabled {
         let osf_state = Arc::clone(&state);
-        let osf_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             if let Err(e) = run_osf_tracking(osf_state).await {
                 error!("OSF tracking error: {}", e);
             }
         });
-        handles.push(osf_handle);
     }
 
     // Start VMC tracking if enabled
     if config.vmc.receiver_enabled {
         let vmc_state = Arc::clone(&state);
-        let vmc_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             if let Err(e) = run_vmc_tracking(vmc_state).await {
                 error!("VMC tracking error: {}", e);
             }
         });
-        handles.push(vmc_handle);
     }
 
     // Start MediaPipe tracking if enabled
     if config.mediapipe.enabled {
         let mp_state = Arc::clone(&state);
-        let mp_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             if let Err(e) = run_mediapipe_tracking(mp_state).await {
                 error!("MediaPipe tracking error: {}", e);
             }
         });
-        handles.push(mp_handle);
     }
 
-    // Wait for shutdown signal
-    shutdown_signal().await;
-    info!("Shutdown signal received");
-
-    // Signal all components to shutdown
-    state.shutdown();
-
-    // Wait for all handles
-    for handle in handles {
-        let _ = handle.await;
-    }
-
-    info!("Rustuber stopped");
-    Ok(())
+    Ok(state)
 }
 
 fn list_audio_devices() {
@@ -263,6 +301,11 @@ async fn run_audio_pipeline(state: Arc<AppState>) -> anyhow::Result<()> {
                         }
                     }
                     Err(e) => {
+                        let msg = e.to_string();
+                        if msg.contains("Stream disconnected") {
+                            warn!("Audio device unavailable, disabling audio pipeline");
+                            break;
+                        }
                         error!("Audio processing error: {}", e);
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
@@ -545,7 +588,8 @@ async fn run_vmc_tracking(state: Arc<AppState>) -> anyhow::Result<()> {
                             .with_mouth_open(mouth_open)
                             .with_blink(blink)
                             .with_head_position(data.head_position)
-                            .with_head_rotation(head_euler);
+                            .with_head_rotation(head_euler)
+                            .with_blendshapes(data.blendshapes.clone());
 
                         if !vmc_config.blend_with_vad {
                             new_state = new_state.with_speaking(mouth_open > 0.15);
@@ -668,6 +712,8 @@ async fn run_mediapipe_tracking(state: Arc<AppState>) -> anyhow::Result<()> {
 }
 
 async fn shutdown_signal() {
+    use tokio::signal;
+
     let ctrl_c = async {
         signal::ctrl_c()
             .await
