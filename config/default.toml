@@ -1,0 +1,177 @@
+# Rustuber Default Configuration
+# Copy this file to config.toml and modify as needed
+
+[audio]
+# Audio device name or "default" to use system default
+device = "default"
+# Sample rate in Hz (16000 is optimal for VAD)
+sample_rate = 16000
+# Number of channels (1 = mono, recommended for VAD)
+channels = 1
+# Buffer size in samples
+buffer_size = 512
+
+[vad]
+# VAD provider: "energy", "silero", "webrtc", or "remote"
+provider = "energy"
+# Silero VAD threshold (0.0 - 1.0)
+silero_threshold = 0.5
+# WebRTC VAD mode (0-3, higher = more aggressive)
+webrtc_mode = 2
+# Energy-based VAD threshold in dB
+energy_threshold_db = -40.0
+# Attack time in ms (delay before voice starts)
+attack_ms = 50
+# Release time in ms (delay before voice ends)
+release_ms = 200
+# Minimum speech duration in ms
+min_speech_ms = 100
+
+[avatar]
+# Default state on startup
+default_state = "idle"
+# State transition duration in ms
+transition_ms = 100
+# Directory containing avatar assets
+assets_dir = "./assets/default"
+
+# State to image mapping
+[avatar.states]
+idle = "idle.png"
+speaking = "speaking.png"
+
+# Expression to image mapping
+[avatar.expressions]
+happy = "expressions/happy.png"
+surprised = "expressions/surprised.png"
+sad = "expressions/sad.png"
+angry = "expressions/angry.png"
+
+[obs]
+# Enable OBS WebSocket integration
+enabled = false
+# OBS WebSocket host
+host = "127.0.0.1"
+# OBS WebSocket port
+port = 4455
+# OBS WebSocket password (leave empty if not set)
+password = ""
+# Output mode: "scene" (switch scenes) or "source" (toggle source visibility)
+mode = "scene"
+# Scene names for scene mode
+idle_scene = "Idle"
+speaking_scene = "Speaking"
+# Scene and source names for source mode
+# scene = "Main"
+# idle_source = "avatar_idle"
+# speaking_source = "avatar_speaking"
+# Reconnect delay in seconds
+reconnect_delay_secs = 5
+
+[http]
+# Enable HTTP server for browser source and dashboard
+enabled = true
+# HTTP server host
+host = "127.0.0.1"
+# HTTP server port
+port = 8080
+# Enable CORS
+cors_enabled = true
+# Allowed CORS origins (use ["*"] for all)
+cors_origins = ["*"]
+
+[vmc]
+# Enable VMC protocol receiver for face tracking
+receiver_enabled = false
+# VMC receiver port
+receiver_port = 39539
+# Blend VMC data with VAD (face tracking + voice detection)
+blend_with_vad = true
+
+# Expression mappings from VMC blendshapes
+# [vmc.expressions.happy]
+# blendshape = "mouthSmileLeft"
+# threshold = 0.5
+
+[osf]
+# Enable OpenSeeFace native face tracking
+enabled = false
+# UDP port to receive OSF data on
+port = 11573
+# Listen address for UDP socket
+listen_address = "127.0.0.1"
+# Auto-launch OpenSeeFace facetracker subprocess
+auto_launch = false
+# Path to facetracker.py script
+facetracker_path = "OpenSeeFace/facetracker.py"
+# Camera device index (0 = first camera)
+camera_device = 0
+# Model quality (-3 to 4, higher = better but slower)
+model_quality = 3
+# Maximum number of faces to track
+max_faces = 1
+# Camera capture width
+capture_width = 640
+# Camera capture height
+capture_height = 480
+# Camera capture FPS
+capture_fps = 24
+# Face ID to use from multi-face tracking
+face_id = 0
+# Blend OSF tracking data with VAD (face tracking + voice detection)
+blend_with_vad = true
+# Auto-restart subprocess on crash
+auto_restart = true
+# Delay before restarting crashed subprocess (seconds)
+restart_delay_secs = 3
+
+[mediapipe]
+# Enable MediaPipe face tracking
+# Auto-enables if mediapipe Python package is installed and no other tracker is active
+enabled = false
+# UDP port to receive MediaPipe tracker data on
+port = 12346
+# Listen address for UDP socket
+listen_address = "127.0.0.1"
+# Auto-launch the Python tracker subprocess
+auto_launch = true
+# Path to the MediaPipe tracker script
+tracker_script = "scripts/mp_tracker.py"
+# Camera device index (0 = first camera)
+camera_device = 0
+# Camera capture width
+capture_width = 640
+# Camera capture height
+capture_height = 480
+# Camera capture FPS
+capture_fps = 30
+# Directory to store/cache the MediaPipe model file
+model_dir = "."
+# Blend MediaPipe tracking data with VAD (face tracking + voice detection)
+blend_with_vad = true
+# Auto-restart subprocess on crash
+auto_restart = true
+# Delay before restarting crashed subprocess (seconds)
+restart_delay_secs = 3
+
+[integration]
+# Integration mode: "standalone", "media", "ai", or "full"
+mode = "standalone"
+
+[integration.media]
+# secretary-media service URL
+url = "http://localhost:8081"
+# Enable TTS synthesis
+enable_tts = false
+# TTS voice selection
+tts_voice = "alloy"
+# Use remote VAD processing
+use_remote_vad = false
+
+[integration.ai]
+# secretary_rust AI service URL
+url = "http://localhost:8080"
+# Agent ID for personality
+# agent_id = "vtuber-personality"
+# Enable chat responses
+enable_responses = false
