@@ -351,17 +351,7 @@ impl RustuberApp {
         let time = self.start_time.elapsed().as_secs_f32();
         let avatar = &self.cached_avatar;
 
-        // Smooth blendshapes, then map
-        let morph_weights = if avatar.blendshapes().is_empty() {
-            vec![0.0f32; mapper.num_targets()]
-        } else {
-            let smoothed_bs =
-                self.smoother
-                    .smooth_blendshapes(avatar.blendshapes(), dt, &self.tuning);
-            mapper.map_blendshapes(&smoothed_bs, self.tuning.blendshape_sensitivity)
-        };
-
-        // Smooth head rotation, then decide tracking vs idle
+        // Smooth head rotation first (needed for eye occlusion compensation)
         let head_rot = {
             let r = avatar.head_rotation();
             if r[0].abs() < 0.01 && r[1].abs() < 0.01 && r[2].abs() < 0.01 {
@@ -370,6 +360,21 @@ impl RustuberApp {
                 let smoothed = self.smoother.smooth_head(r, dt, &self.tuning);
                 Some(smoothed)
             }
+        };
+
+        // Head yaw in radians for eye occlusion (yaw is index 1, in degrees)
+        let head_yaw_rad = head_rot
+            .map(|[_, yaw, _]| yaw.to_radians())
+            .unwrap_or(0.0);
+
+        // Smooth blendshapes, then map (with head yaw for eye occlusion)
+        let morph_weights = if avatar.blendshapes().is_empty() {
+            vec![0.0f32; mapper.num_targets()]
+        } else {
+            let smoothed_bs =
+                self.smoother
+                    .smooth_blendshapes(avatar.blendshapes(), dt, &self.tuning);
+            mapper.map_blendshapes(&smoothed_bs, self.tuning.blendshape_sensitivity, head_yaw_rad)
         };
 
         // Compute animated bone rotations

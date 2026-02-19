@@ -14,6 +14,7 @@ signal-smooth = { path = "../signal-smooth" }
 cpal = "0.15"
 alsa = "0.9"
 voice_activity_detector = { version = "0.2", optional = true }
+rubato = "0.16"
 
 # OBS WebSocket
 obws = "0.14"
