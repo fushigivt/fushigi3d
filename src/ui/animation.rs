@@ -301,18 +301,35 @@ fn apply_finger_curl(pose: &mut HashMap<usize, Quat>, model: &VrmModel, time: f3
     }
 }
 
+/// Blend IK-solved arm rotations into the procedural pose.
+fn apply_body_ik_blend(
+    pose: &mut HashMap<usize, Quat>,
+    model: &VrmModel,
+    ik_rotations: &HashMap<usize, Quat>,
+    blend: f32,
+) {
+    for (&node, &ik_rot) in ik_rotations {
+        let rest = model.rest_rotations[node];
+        let current = *pose.get(&node).unwrap_or(&rest);
+        let blended = current.slerp(ik_rot, blend);
+        pose.insert(node, blended);
+    }
+}
+
 /// Compute animated bone rotations for the current frame.
 ///
 /// `time`: elapsed time in seconds (monotonic)
 /// `head_rotation_deg`: [pitch, yaw, roll] from tracking (degrees), or None for idle
 /// `is_speaking`: whether the avatar is currently speaking
 /// `tuning`: tracking sensitivity and scaling parameters
+/// `body_ik_rotations`: optional IK-solved rotations from body tracking
 pub fn animated_pose(
     model: &VrmModel,
     time: f32,
     head_rotation_deg: Option<[f32; 3]>,
     is_speaking: bool,
     tuning: &crate::config::TrackingTuning,
+    body_ik_rotations: Option<&HashMap<usize, Quat>>,
 ) -> HashMap<usize, Quat> {
     let mut pose = idle_pose(model);
 
@@ -324,6 +341,11 @@ pub fn animated_pose(
 
     apply_body_follow(&mut pose, model, head_rx, head_ry);
     apply_arm_animation(&mut pose, model, time, head_ry, is_speaking);
+
+    if let Some(ik) = body_ik_rotations {
+        apply_body_ik_blend(&mut pose, model, ik, tuning.body_blend_factor);
+    }
+
     apply_finger_curl(&mut pose, model, time);
 
     pose
@@ -344,9 +366,9 @@ mod tests {
         let tuning = crate::config::TrackingTuning::default();
 
         // Should not panic with any input combination
-        let _pose1 = animated_pose(&model, 0.0, None, false, &tuning);
-        let _pose2 = animated_pose(&model, 1.5, Some([10.0, -5.0, 2.0]), true, &tuning);
-        let _pose3 = animated_pose(&model, 100.0, None, true, &tuning);
+        let _pose1 = animated_pose(&model, 0.0, None, false, &tuning, None);
+        let _pose2 = animated_pose(&model, 1.5, Some([10.0, -5.0, 2.0]), true, &tuning, None);
+        let _pose3 = animated_pose(&model, 100.0, None, true, &tuning, None);
     }
 
     #[test]
@@ -358,7 +380,7 @@ mod tests {
         let model = VrmModel::load(model_path).unwrap();
         let tuning = crate::config::TrackingTuning::default();
 
-        let pose = animated_pose(&model, 1.0, Some([5.0, -3.0, 1.0]), true, &tuning);
+        let pose = animated_pose(&model, 1.0, Some([5.0, -3.0, 1.0]), true, &tuning, None);
 
         // Should animate more than just head/neck/shoulders/spine/chest/hips
         assert!(
@@ -377,8 +399,8 @@ mod tests {
         let model = VrmModel::load(model_path).unwrap();
         let tuning = crate::config::TrackingTuning::default();
 
-        let pose_neutral = animated_pose(&model, 1.0, Some([0.0, 0.0, 0.0]), false, &tuning);
-        let pose_turned = animated_pose(&model, 1.0, Some([0.0, 30.0, 0.0]), false, &tuning);
+        let pose_neutral = animated_pose(&model, 1.0, Some([0.0, 0.0, 0.0]), false, &tuning, None);
+        let pose_turned = animated_pose(&model, 1.0, Some([0.0, 30.0, 0.0]), false, &tuning, None);
 
         // Upper chest should differ when head is turned
         if let Some(&uc_node) = model.bone_to_node.get("upperChest") {
@@ -405,8 +427,8 @@ mod tests {
         let tuning = crate::config::TrackingTuning::default();
 
         // Test at a time where the sine is near peak to see amplitude difference
-        let pose_quiet = animated_pose(&model, 0.625, None, false, &tuning);
-        let pose_speak = animated_pose(&model, 0.625, None, true, &tuning);
+        let pose_quiet = animated_pose(&model, 0.625, None, false, &tuning, None);
+        let pose_speak = animated_pose(&model, 0.625, None, true, &tuning, None);
 
         if let Some(&l_upper) = model.bone_to_node.get("leftUpperArm") {
             if let (Some(&q_quiet), Some(&q_speak)) =

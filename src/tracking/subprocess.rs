@@ -118,15 +118,21 @@ impl MpSubprocess {
             return Ok(());
         }
 
-        let child = Command::new("python3")
-            .arg(&self.config.tracker_script)
+        let mut cmd = Command::new("python3");
+        cmd.arg(&self.config.tracker_script)
             .args(["--ip", &self.config.listen_address])
             .args(["--port", &self.config.port.to_string()])
             .args(["--capture", &self.config.camera_device.to_string()])
             .args(["--width", &self.config.capture_width.to_string()])
             .args(["--height", &self.config.capture_height.to_string()])
             .args(["--fps", &self.config.capture_fps.to_string()])
-            .args(["--model-dir", &self.config.model_dir])
+            .args(["--model-dir", &self.config.model_dir]);
+
+        if !self.config.enable_body_tracking {
+            cmd.arg("--no-pose");
+        }
+
+        let child = cmd
             .kill_on_drop(true)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())

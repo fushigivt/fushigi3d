@@ -52,6 +52,9 @@ pub struct AvatarState {
     /// Full ARKit blendshape map (used for VRM morph targets)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     blendshapes: HashMap<String, f32>,
+    /// Body landmark positions from pose tracking (landmark name → [x, y, z])
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    body_landmarks: HashMap<String, [f32; 3]>,
     /// Timestamp of last state change (not serialized)
     #[serde(skip)]
     last_change: Option<Instant>,
@@ -68,6 +71,7 @@ impl Default for AvatarState {
             head_position: [0.0, 0.0, 0.0],
             head_rotation: [0.0, 0.0, 0.0],
             blendshapes: HashMap::new(),
+            body_landmarks: HashMap::new(),
             last_change: Some(Instant::now()),
         }
     }
@@ -195,6 +199,22 @@ impl AvatarState {
     pub fn with_blendshapes(mut self, blendshapes: HashMap<String, f32>) -> Self {
         self.blendshapes = blendshapes;
         self
+    }
+
+    /// Create a new state with body landmark positions
+    pub fn with_body_landmarks(mut self, body_landmarks: HashMap<String, [f32; 3]>) -> Self {
+        self.body_landmarks = body_landmarks;
+        self
+    }
+
+    /// Get the body landmark positions
+    pub fn body_landmarks(&self) -> &HashMap<String, [f32; 3]> {
+        &self.body_landmarks
+    }
+
+    /// Check if body tracking data is present
+    pub fn has_body_tracking(&self) -> bool {
+        !self.body_landmarks.is_empty()
     }
 
     /// Get the asset key for current state (used for image lookup)

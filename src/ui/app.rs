@@ -13,6 +13,7 @@ use crate::AppState;
 
 use super::animation;
 use super::blendshape_map::BlendshapeMapper;
+use super::body_ik::BodyIkSetup;
 use super::renderer::VrmRenderer;
 use super::skinning;
 use super::smoothing::{SmoothingMode, TrackingSmoother};
@@ -59,6 +60,8 @@ pub struct RustuberApp {
     selected_device: String,
     /// Tracking smoother for head rotation and blendshapes
     smoother: TrackingSmoother,
+    /// Body IK solver (precomputed from model)
+    body_ik: Option<BodyIkSetup>,
     /// Tracking tuning parameters (editable via UI)
     tuning: crate::config::TrackingTuning,
     /// Last frame timestamp for computing dt
@@ -119,6 +122,7 @@ impl RustuberApp {
             audio_devices,
             selected_device,
             smoother,
+            body_ik: None,
             tuning,
             last_frame: Instant::now(),
             selected_vad,
@@ -210,6 +214,11 @@ impl RustuberApp {
             skinned_meshes.push(skinned);
         }
         renderer.update_vertices(queue, &model, &skinned_meshes);
+
+        self.body_ik = BodyIkSetup::from_model(&model);
+        if self.body_ik.is_some() {
+            tracing::info!("Body IK setup initialized for arm tracking");
+        }
 
         self.model = Some(model);
         self.renderer = Some(renderer);
@@ -377,9 +386,28 @@ impl RustuberApp {
             mapper.map_blendshapes(&smoothed_bs, self.tuning.blendshape_sensitivity, head_yaw_rad)
         };
 
+        // Solve body IK if tracking data is available
+        let body_ik_rotations = if avatar.has_body_tracking() {
+            let smoothed = self
+                .smoother
+                .smooth_body_landmarks(avatar.body_landmarks(), dt, &self.tuning);
+            let rest_world = skinning::compute_world_transforms(&model, &HashMap::new());
+            self.body_ik
+                .as_ref()
+                .map(|ik| ik.solve(&model, &smoothed, &rest_world))
+        } else {
+            None
+        };
+
         // Compute animated bone rotations
-        let bone_rotations =
-            animation::animated_pose(&model, time, head_rot, avatar.is_speaking(), &self.tuning);
+        let bone_rotations = animation::animated_pose(
+            &model,
+            time,
+            head_rot,
+            avatar.is_speaking(),
+            &self.tuning,
+            body_ik_rotations.as_ref(),
+        );
 
         // Forward kinematics
         let world = skinning::compute_world_transforms(&model, &bone_rotations);
@@ -527,6 +555,9 @@ impl eframe::App for RustuberApp {
             if !avatar.blendshapes().is_empty() {
                 ui.label(format!("Blendshapes: {}", avatar.blendshapes().len()));
             }
+            if avatar.has_body_tracking() {
+                ui.label(format!("Body landmarks: {}", avatar.body_landmarks().len()));
+            }
 
             ui.separator();
 
@@ -630,6 +661,22 @@ impl eframe::App for RustuberApp {
                     );
                 }
                 SmoothingMode::None => {}
+            }
+
+            ui.separator();
+            ui.heading("Body Tracking");
+            ui.add(
+                egui::Slider::new(&mut self.tuning.body_blend_factor, 0.0..=1.0)
+                    .text("Body blend"),
+            );
+            match self.smoother.mode() {
+                SmoothingMode::Spring => {
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.body_halflife, 0.01..=0.5)
+                            .text("Body halflife"),
+                    );
+                }
+                _ => {}
             }
 
             // In 2D mode, show the current asset key

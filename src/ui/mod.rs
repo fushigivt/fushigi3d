@@ -11,6 +11,7 @@
 mod animation;
 mod app;
 mod blendshape_map;
+mod body_ik;
 mod renderer;
 mod smoothing;
 mod skinning;

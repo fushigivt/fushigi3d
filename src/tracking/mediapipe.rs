@@ -27,6 +27,12 @@ pub struct MpPacket {
     pub head_position: [f32; 3],
     /// Head rotation in degrees [pitch, yaw, roll]
     pub head_rotation: [f32; 3],
+    /// Whether a body pose was detected this frame
+    #[serde(default)]
+    pub body_detected: bool,
+    /// Body landmark name → [x, y, z] world position (glTF coords)
+    #[serde(default)]
+    pub body_landmarks: HashMap<String, [f32; 3]>,
 }
 
 /// Aggregated MediaPipe tracking data (mirrors VmcData/OsfData pattern)
@@ -71,6 +77,10 @@ impl MpData {
 
         if !blend_with_vad {
             state = state.with_speaking(mouth_open > 0.15);
+        }
+
+        if pkt.body_detected && !pkt.body_landmarks.is_empty() {
+            state = state.with_body_landmarks(pkt.body_landmarks.clone());
         }
 
         state
@@ -268,5 +278,65 @@ mod tests {
         let data = MpData::default();
         assert!(!data.has_data);
         assert!(data.packet.is_none());
+    }
+
+    #[test]
+    fn test_parse_packet_with_body() {
+        let json = serde_json::json!({
+            "face_detected": true,
+            "blendshapes": {"jawOpen": 0.3},
+            "head_position": [0.0, 0.0, 0.0],
+            "head_rotation": [0.0, 0.0, 0.0],
+            "body_detected": true,
+            "body_landmarks": {
+                "leftShoulder": [0.1, 0.5, -0.3],
+                "rightShoulder": [-0.1, 0.5, -0.3],
+                "leftElbow": [0.2, 0.3, -0.2],
+                "rightElbow": [-0.2, 0.3, -0.2]
+            }
+        })
+        .to_string();
+
+        let pkt: MpPacket = serde_json::from_str(&json).unwrap();
+        assert!(pkt.body_detected);
+        assert_eq!(pkt.body_landmarks.len(), 4);
+        assert!((pkt.body_landmarks["leftShoulder"][0] - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_legacy_packet_without_body() {
+        // Legacy packet without body_detected/body_landmarks fields
+        let json = r#"{"face_detected":true,"blendshapes":{"jawOpen":0.5},"head_position":[0,0,0],"head_rotation":[0,0,0]}"#;
+        let pkt: MpPacket = serde_json::from_str(json).unwrap();
+        assert!(pkt.face_detected);
+        assert!(!pkt.body_detected);
+        assert!(pkt.body_landmarks.is_empty());
+    }
+
+    #[test]
+    fn test_to_avatar_state_with_body() {
+        let json = serde_json::json!({
+            "face_detected": true,
+            "blendshapes": {"jawOpen": 0.3},
+            "head_position": [0.0, 0.0, 0.0],
+            "head_rotation": [0.0, 0.0, 0.0],
+            "body_detected": true,
+            "body_landmarks": {
+                "leftShoulder": [0.1, 0.5, -0.3],
+                "rightShoulder": [-0.1, 0.5, -0.3]
+            }
+        })
+        .to_string();
+
+        let pkt: MpPacket = serde_json::from_str(&json).unwrap();
+        let data = MpData {
+            packet: Some(pkt),
+            has_data: true,
+        };
+
+        let current = AvatarState::default();
+        let updated = data.to_avatar_state(&current, true);
+        assert!(updated.has_body_tracking());
+        assert_eq!(updated.body_landmarks().len(), 2);
     }
 }

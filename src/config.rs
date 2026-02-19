@@ -278,6 +278,14 @@ pub struct TrackingTuning {
     #[serde(default = "default_10_0")]
     pub blink_beta: f32,
 
+    // --- Body tracking ---
+    /// Spring halflife for body landmarks (seconds)
+    #[serde(default = "default_0_15")]
+    pub body_halflife: f32,
+    /// Blend factor: 0.0 = pure procedural, 1.0 = pure tracked
+    #[serde(default = "default_0_85")]
+    pub body_blend_factor: f32,
+
     // --- Deadzones ---
     #[serde(default = "default_0_5")]
     pub head_deadzone: f32,
@@ -305,6 +313,8 @@ fn default_0_005() -> f32 { 0.005 }
 fn default_15_0() -> f32 { 15.0 }
 fn default_0_8() -> f32 { 0.8 }
 fn default_10_0() -> f32 { 10.0 }
+fn default_0_15() -> f32 { 0.15 }
+fn default_0_85() -> f32 { 0.85 }
 fn default_0_5() -> f32 { 0.5 }
 fn default_0_02() -> f32 { 0.02 }
 fn default_0_4() -> f32 { 0.4 }
@@ -327,6 +337,8 @@ impl Default for TrackingTuning {
             blendshape_beta: default_15_0(),
             blink_min_cutoff: default_0_8(),
             blink_beta: default_10_0(),
+            body_halflife: default_0_15(),
+            body_blend_factor: default_0_85(),
             head_deadzone: default_0_5(),
             blendshape_deadzone: default_0_02(),
             expression_fade_duration: default_0_4(),
@@ -584,6 +596,8 @@ pub struct MediaPipeConfig {
     pub model_dir: String,
     /// Blend MediaPipe tracking data with VAD state
     pub blend_with_vad: bool,
+    /// Enable body pose tracking alongside face tracking
+    pub enable_body_tracking: bool,
     /// Auto-restart subprocess on crash
     pub auto_restart: bool,
     /// Delay before restarting crashed subprocess (seconds)
@@ -604,6 +618,7 @@ impl Default for MediaPipeConfig {
             capture_fps: 30,
             model_dir: ".".to_string(),
             blend_with_vad: true,
+            enable_body_tracking: true,
             auto_restart: true,
             restart_delay_secs: 3,
         }

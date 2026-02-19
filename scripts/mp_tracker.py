@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""MediaPipe Face Landmarker → JSON-over-UDP tracker for Rustuber.
+"""MediaPipe Face & Pose Landmarker → JSON-over-UDP tracker for Rustuber.
 
 Captures webcam frames, runs MediaPipe Face Landmarker to extract ARKit-compatible
-blendshapes and head pose, then sends JSON packets over UDP.
+blendshapes and head pose, and optionally runs Pose Landmarker for body tracking.
+Sends combined JSON packets over UDP.
 
 Requirements:
     pip install mediapipe opencv-python
 
 Usage:
     python3 mp_tracker.py --port 12346
+    python3 mp_tracker.py --port 12346 --no-pose
 """
 
 import argparse
@@ -26,15 +28,32 @@ import numpy as np
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 MODEL_FILENAME = "face_landmarker.task"
 
+POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+POSE_MODEL_FILENAME = "pose_landmarker_lite.task"
 
-def ensure_model(model_dir: str) -> str:
-    """Download the face_landmarker.task model if not already present."""
-    path = Path(model_dir) / MODEL_FILENAME
+# MediaPipe Pose world landmark indices we care about:
+# 11=left_shoulder, 12=right_shoulder, 13=left_elbow, 14=right_elbow,
+# 15=left_wrist, 16=right_wrist, 23=left_hip, 24=right_hip
+POSE_LANDMARK_MAP = {
+    11: "leftShoulder",
+    12: "rightShoulder",
+    13: "leftElbow",
+    14: "rightElbow",
+    15: "leftWrist",
+    16: "rightWrist",
+    23: "leftHip",
+    24: "rightHip",
+}
+
+
+def ensure_model(model_dir: str, url: str, filename: str) -> str:
+    """Download a model file if not already present."""
+    path = Path(model_dir) / filename
     if path.exists():
         return str(path)
-    print(f"Downloading MediaPipe face landmarker model to {path} ...")
+    print(f"Downloading MediaPipe model to {path} ...")
     Path(model_dir).mkdir(parents=True, exist_ok=True)
-    urllib.request.urlretrieve(MODEL_URL, str(path))
+    urllib.request.urlretrieve(url, str(path))
     print("Download complete.")
     return str(path)
 
@@ -68,12 +87,13 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=480, help="Capture height")
     parser.add_argument("--fps", type=int, default=30, help="Capture FPS")
     parser.add_argument("--model-dir", default=".", help="Directory for model file")
+    parser.add_argument("--no-pose", action="store_true", help="Disable body pose tracking")
     args = parser.parse_args()
 
     # Import mediapipe after arg parse so --help works without it installed
     import mediapipe as mp
 
-    model_path = ensure_model(args.model_dir)
+    face_model_path = ensure_model(args.model_dir, MODEL_URL, MODEL_FILENAME)
 
     # Set up Face Landmarker
     BaseOptions = mp.tasks.BaseOptions
@@ -81,13 +101,27 @@ def main() -> None:
     FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
     VisionRunningMode = mp.tasks.vision.RunningMode
 
-    options = FaceLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=model_path),
+    face_options = FaceLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=face_model_path),
         running_mode=VisionRunningMode.VIDEO,
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
         num_faces=1,
     )
+
+    # Optionally set up Pose Landmarker
+    pose_landmarker = None
+    use_pose = not args.no_pose
+    if use_pose:
+        pose_model_path = ensure_model(args.model_dir, POSE_MODEL_URL, POSE_MODEL_FILENAME)
+        PoseLandmarker = mp.tasks.vision.PoseLandmarker
+        PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+        pose_options = PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=pose_model_path),
+            running_mode=VisionRunningMode.VIDEO,
+            output_segmentation_masks=False,
+            num_poses=1,
+        )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = (args.ip, args.port)
@@ -101,9 +135,20 @@ def main() -> None:
         print(f"Error: cannot open camera device {args.capture}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"MediaPipe tracker started: camera={args.capture}, sending to {args.ip}:{args.port}")
+    pose_status = "enabled" if use_pose else "disabled"
+    print(f"MediaPipe tracker started: camera={args.capture}, sending to {args.ip}:{args.port}, pose={pose_status}")
 
-    with FaceLandmarker.create_from_options(options) as landmarker:
+    # Create landmarkers using context managers
+    face_ctx = FaceLandmarker.create_from_options(face_options)
+    face_lm = face_ctx.__enter__()
+
+    pose_ctx = None
+    pose_lm = None
+    if use_pose:
+        pose_ctx = PoseLandmarker.create_from_options(pose_options)
+        pose_lm = pose_ctx.__enter__()
+
+    try:
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -115,14 +160,20 @@ def main() -> None:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             timestamp_ms = int(time.monotonic() * 1000)
 
-            result = landmarker.detect_for_video(mp_image, timestamp_ms)
+            # Face detection
+            face_result = face_lm.detect_for_video(mp_image, timestamp_ms)
 
-            if not result.face_blendshapes:
-                packet = {"face_detected": False, "blendshapes": {}, "head_position": [0, 0, 0], "head_rotation": [0, 0, 0]}
+            if not face_result.face_blendshapes:
+                packet = {
+                    "face_detected": False,
+                    "blendshapes": {},
+                    "head_position": [0, 0, 0],
+                    "head_rotation": [0, 0, 0],
+                }
             else:
                 # Extract blendshapes
                 blendshapes = {}
-                for bs in result.face_blendshapes[0]:
+                for bs in face_result.face_blendshapes[0]:
                     # Skip the neutral category
                     if bs.category_name != "_neutral":
                         blendshapes[bs.category_name] = round(bs.score, 4)
@@ -130,8 +181,8 @@ def main() -> None:
                 # Extract head pose from transformation matrix
                 head_position = [0.0, 0.0, 0.0]
                 head_rotation = [0.0, 0.0, 0.0]
-                if result.facial_transformation_matrixes:
-                    mat = np.array(result.facial_transformation_matrixes[0]).reshape(4, 4)
+                if face_result.facial_transformation_matrixes:
+                    mat = np.array(face_result.facial_transformation_matrixes[0]).reshape(4, 4)
                     head_position = [float(mat[0, 3]), float(mat[1, 3]), float(mat[2, 3])]
                     head_rotation = rotation_matrix_to_euler(mat)
 
@@ -142,11 +193,41 @@ def main() -> None:
                     "head_rotation": [round(v, 2) for v in head_rotation],
                 }
 
+            # Pose detection
+            if pose_lm is not None:
+                pose_result = pose_lm.detect_for_video(mp_image, timestamp_ms)
+
+                if pose_result.pose_world_landmarks and len(pose_result.pose_world_landmarks) > 0:
+                    world_lms = pose_result.pose_world_landmarks[0]
+                    body_landmarks = {}
+                    for idx, name in POSE_LANDMARK_MAP.items():
+                        if idx < len(world_lms):
+                            lm = world_lms[idx]
+                            # MediaPipe Pose world: X=right, Y=up, Z=toward camera
+                            # glTF: X=right, Y=up, Z=toward viewer
+                            # Negate Z to convert to glTF coordinates
+                            body_landmarks[name] = [
+                                round(float(lm.x), 4),
+                                round(float(lm.y), 4),
+                                round(float(-lm.z), 4),
+                            ]
+                    packet["body_detected"] = True
+                    packet["body_landmarks"] = body_landmarks
+                else:
+                    packet["body_detected"] = False
+                    packet["body_landmarks"] = {}
+            else:
+                packet["body_detected"] = False
+                packet["body_landmarks"] = {}
+
             data = json.dumps(packet).encode("utf-8")
             sock.sendto(data, dest)
-
-    cap.release()
-    sock.close()
+    finally:
+        face_ctx.__exit__(None, None, None)
+        if pose_ctx is not None:
+            pose_ctx.__exit__(None, None, None)
+        cap.release()
+        sock.close()
 
 
 if __name__ == "__main__":
