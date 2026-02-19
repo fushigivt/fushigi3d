@@ -91,7 +91,11 @@ impl SileroVad {
         // Accumulate samples and process in exact 512-sample chunks
         self.buffer.extend_from_slice(samples);
         while self.buffer.len() >= 512 {
-            let chunk: Vec<f32> = self.buffer.drain(..512).collect();
+            let mut chunk: Vec<f32> = self.buffer.drain(..512).collect();
+            // Normalize audio level for Silero — the model was trained on
+            // normalized audio and outputs low probabilities for quiet input.
+            // Target RMS of 0.1 (-20 dBFS) matches typical training levels.
+            normalize_rms(&mut chunk);
             self.last_probability = self.detector.predict(chunk.iter().copied());
         }
 
@@ -325,6 +329,28 @@ impl VadProcessor {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/// Normalize a chunk to a target RMS level for Silero VAD.
+///
+/// Silero V5 was trained on normalized audio and outputs low probabilities
+/// for quiet input.  This scales each chunk so its RMS is approximately
+/// 0.1 (-20 dBFS), which matches typical training levels.  Near-silent
+/// chunks (RMS < 0.001) are left untouched to avoid amplifying noise.
+#[cfg(feature = "silero-vad")]
+fn normalize_rms(chunk: &mut [f32]) {
+    const TARGET_RMS: f32 = 0.1;
+    const MIN_RMS: f32 = 0.001;
+    const MAX_GAIN: f32 = 20.0;
+
+    let sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
+    let rms = (sum_sq / chunk.len() as f32).sqrt();
+    if rms > MIN_RMS {
+        let gain = (TARGET_RMS / rms).min(MAX_GAIN);
+        for s in chunk.iter_mut() {
+            *s *= gain;
+        }
+    }
+}
 
 /// Compute RMS energy in dB from f32 samples.
 #[cfg(feature = "silero-vad")]
