@@ -184,7 +184,7 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             provider: VadProvider::Silero,
-            silero_threshold: 0.5,
+            silero_threshold: 0.3,
             webrtc_mode: 2,
             energy_threshold_db: -40.0,
             attack_ms: 50,

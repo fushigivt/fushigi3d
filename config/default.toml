@@ -18,7 +18,7 @@ buffer_size = 512
 # Also supports "webrtc" and "remote" (not yet implemented)
 provider = "silero"
 # Silero VAD threshold (0.0 - 1.0)
-silero_threshold = 0.5
+silero_threshold = 0.3
 # WebRTC VAD mode (0-3, higher = more aggressive)
 webrtc_mode = 2
 # Energy-based VAD threshold in dB

@@ -53,9 +53,15 @@ enum VadInner {
 #[cfg(feature = "silero-vad")]
 struct SileroVad {
     detector: voice_activity_detector::VoiceActivityDetector,
-    threshold: f32,
+    /// Onset threshold — probability must exceed this to start speech.
+    onset_threshold: f32,
+    /// Offset threshold — probability must drop below this to begin ending speech.
+    /// Lower than onset to prevent flickering at word boundaries (hysteresis).
+    offset_threshold: f32,
     is_speech: bool,
+    /// Last time probability was above the offset threshold.
     last_speech_frame: Instant,
+    /// How long probability must stay below offset before speech ends.
     hangover: Duration,
     /// Accumulator so the model always receives exactly 512 samples.
     /// Feeding truncated/padded chunks corrupts the RNN's internal state.
@@ -73,9 +79,15 @@ impl SileroVad {
             .build()
             .map_err(|e| AudioError::VadInit(format!("Silero VAD init failed: {}", e)))?;
 
+        let onset = config.silero_threshold;
+        // Offset is onset/3, rounded down — wide hysteresis band since
+        // our mic environment has low noise.
+        let offset = (onset / 3.0).max(0.01);
+
         Ok(Self {
             detector,
-            threshold: config.silero_threshold,
+            onset_threshold: onset,
+            offset_threshold: offset,
             is_speech: false,
             last_speech_frame: Instant::now(),
             hangover: Duration::from_millis(config.release_ms as u64),
@@ -102,11 +114,20 @@ impl SileroVad {
         let probability = self.last_probability;
         let now = Instant::now();
 
-        if probability >= self.threshold {
-            self.last_speech_frame = now;
-            self.is_speech = true;
-        } else if self.is_speech && now.duration_since(self.last_speech_frame) >= self.hangover {
-            self.is_speech = false;
+        if self.is_speech {
+            // Currently speaking — only start ending when probability drops
+            // below the lower offset threshold (hysteresis band).
+            if probability >= self.offset_threshold {
+                self.last_speech_frame = now;
+            } else if now.duration_since(self.last_speech_frame) >= self.hangover {
+                self.is_speech = false;
+            }
+        } else {
+            // Currently silent — need probability above onset to start speech.
+            if probability >= self.onset_threshold {
+                self.last_speech_frame = now;
+                self.is_speech = true;
+            }
         }
 
         (self.is_speech, probability, energy_db)
@@ -246,8 +267,12 @@ impl VadProcessor {
             VadInner::Silero(vad) => vad.process(samples),
         };
 
-        // Apply attack/release timing
-        let is_speech = self.apply_timing(raw_is_speech);
+        // Silero handles its own timing via hysteresis + hangover.
+        // Only apply the outer attack/release layer for energy VAD.
+        let is_speech = match self.active_provider {
+            VadProvider::Silero => raw_is_speech,
+            _ => self.apply_timing(raw_is_speech),
+        };
 
         // Update state tracking
         if is_speech != self.current_activity.is_speech {
