@@ -11,6 +11,7 @@ repository = ""
 
 # Audio & VAD
 cpal = "0.15"
+alsa = "0.9"
 
 # OBS WebSocket
 obws = "0.14"

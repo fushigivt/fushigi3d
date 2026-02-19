@@ -278,51 +278,68 @@ fn list_audio_devices() {
 }
 
 async fn run_audio_pipeline(state: Arc<AppState>) -> anyhow::Result<()> {
-    let config = state.config.read().await;
-    let mut pipeline = AudioPipeline::new(&config.audio, &config.vad)?;
-    drop(config);
-
     let mut shutdown_rx = state.subscribe_shutdown();
 
-    info!("Audio pipeline started");
-
     loop {
-        tokio::select! {
-            result = pipeline.process() => {
-                match result {
-                    Ok(is_speaking) => {
-                        // Publish audio levels for UI display
-                        let activity = pipeline.get_activity();
-                        state.set_audio_levels(activity.energy_db, activity.confidence);
-
-                        let current = state.get_avatar_state().await;
-                        // Only update if speaking state changed
-                        if is_speaking != current.is_speaking() {
-                            let old_state = current.state_type();
-                            let new_state = current.with_speaking(is_speaking);
-                            info!("State change: {:?} -> {:?}", old_state, new_state.state_type());
-                            state.update_avatar_state(new_state).await;
-                        }
-                    }
-                    Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("Stream disconnected") {
-                            warn!("Audio device unavailable, disabling audio pipeline");
-                            break;
-                        }
-                        error!("Audio processing error: {}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
+        let config = state.config.read().await;
+        let mut pipeline = match AudioPipeline::new(&config.audio, &config.vad) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Failed to create audio pipeline: {}", e);
+                drop(config); // Release read lock before waiting
+                tokio::select! {
+                    _ = state.wait_audio_restart() => continue,
+                    _ = shutdown_rx.recv() => return Ok(()),
                 }
             }
-            _ = shutdown_rx.recv() => {
-                info!("Audio pipeline shutting down");
-                break;
+        };
+        drop(config);
+
+        info!("Audio pipeline started");
+
+        loop {
+            tokio::select! {
+                result = pipeline.process() => {
+                    match result {
+                        Ok(is_speaking) => {
+                            // Publish audio levels for UI display
+                            let activity = pipeline.get_activity();
+                            state.set_audio_levels(activity.energy_db, activity.confidence);
+
+                            let current = state.get_avatar_state().await;
+                            // Only update if speaking state changed
+                            if is_speaking != current.is_speaking() {
+                                let old_state = current.state_type();
+                                let new_state = current.with_speaking(is_speaking);
+                                info!("State change: {:?} -> {:?}", old_state, new_state.state_type());
+                                state.update_avatar_state(new_state).await;
+                            }
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("Stream disconnected") {
+                                warn!("Audio device unavailable, waiting for restart signal");
+                                tokio::select! {
+                                    _ = state.wait_audio_restart() => break,
+                                    _ = shutdown_rx.recv() => return Ok(()),
+                                }
+                            }
+                            error!("Audio processing error: {}", e);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+                    }
+                }
+                _ = state.wait_audio_restart() => {
+                    info!("Audio device changed, restarting pipeline");
+                    break; // breaks inner loop, outer loop recreates pipeline
+                }
+                _ = shutdown_rx.recv() => {
+                    info!("Audio pipeline shutting down");
+                    return Ok(());
+                }
             }
         }
     }
-
-    Ok(())
 }
 
 async fn run_obs_client(state: Arc<AppState>) -> anyhow::Result<()> {

@@ -217,9 +217,14 @@ mod tests {
         let speech: Vec<f32> = (0..512)
             .map(|i| (i as f32 * 0.1).sin() * 0.5)
             .collect();
-        let (is_speech, confidence, _) = vad.process(&speech);
-        assert!(is_speech);
-        assert!(confidence > 0.0);
+        // Feed multiple frames so the smoothed energy converges past the threshold
+        // (smoothed_energy starts at -100 dB, needs several iterations to climb)
+        let mut result = (false, 0.0f32, 0.0f32);
+        for _ in 0..20 {
+            result = vad.process(&speech);
+        }
+        assert!(result.0, "expected speech detected after convergence");
+        assert!(result.1 > 0.0, "expected confidence > 0");
     }
 
     #[test]

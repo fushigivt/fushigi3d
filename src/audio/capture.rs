@@ -1,316 +1,216 @@
-//! Audio device capture using cpal
+//! Audio device capture using ALSA directly.
+//!
+//! cpal's callback-based ALSA backend stalls on PipeWire systems, so we use
+//! the `alsa` crate directly with blocking reads (the same approach `arecord`
+//! takes). Samples are read as S16_LE and converted to f32.
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleRate, Stream, StreamConfig};
+use alsa::pcm::{Access, Format, HwParams, PCM};
+use alsa::{Direction, ValueOr};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::thread;
 
 use crate::config::AudioConfig;
 use crate::error::{AudioError, RustuberError};
 
-/// Audio capture from input device
+/// Audio capture from ALSA input device.
 ///
-/// This struct uses a separate thread for audio capture since cpal::Stream
-/// is not Send. Samples are communicated through crossbeam channels.
+/// Runs a blocking-read loop on a dedicated thread and sends mono f32 sample
+/// buffers through a crossbeam channel.
 pub struct AudioCapture {
     sample_rx: Receiver<Vec<f32>>,
     stop_tx: Sender<()>,
-    config: StreamConfig,
+    sample_rate: u32,
     _thread_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl AudioCapture {
-    /// Create a new audio capture from configuration
+    /// Create a new audio capture from configuration.
     pub fn new(config: &AudioConfig) -> Result<Self, RustuberError> {
-        let host = cpal::default_host();
-
-        // Find the requested device
-        let device = if config.device == "default" {
-            host.default_input_device()
-                .ok_or(AudioError::NoDefaultInput)?
+        let device_name = if config.device == "default" {
+            "default".to_string()
         } else {
-            find_device_by_name(&host, &config.device)?
+            config.device.clone()
         };
 
-        let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
         tracing::info!("Using audio device: {}", device_name);
 
-        // Get supported config
-        let supported_config = device
-            .supported_input_configs()
-            .map_err(|e| AudioError::UnsupportedConfig(e.to_string()))?
-            .filter(|c| c.channels() == config.channels)
-            .find(|c| {
-                c.min_sample_rate() <= SampleRate(config.sample_rate)
-                    && c.max_sample_rate() >= SampleRate(config.sample_rate)
-            })
-            .or_else(|| {
-                // Try any config if exact match not found
-                device
-                    .supported_input_configs()
-                    .ok()?
-                    .next()
-            })
-            .ok_or_else(|| AudioError::UnsupportedConfig("No suitable config found".to_string()))?;
+        // Open the ALSA capture device
+        let pcm = PCM::new(&device_name, Direction::Capture, false)
+            .map_err(|e| AudioError::StreamBuild(format!("Failed to open ALSA device '{}': {}", device_name, e)))?;
 
-        let stream_config = StreamConfig {
-            channels: config.channels,
-            sample_rate: SampleRate(config.sample_rate),
-            buffer_size: cpal::BufferSize::Fixed(config.buffer_size),
-        };
+        // Configure hardware parameters
+        let hw = HwParams::any(&pcm)
+            .map_err(|e| AudioError::StreamBuild(format!("HwParams::any: {}", e)))?;
 
-        tracing::debug!(
-            "Stream config: {} Hz, {} channels, buffer size {}",
-            stream_config.sample_rate.0,
-            stream_config.channels,
-            config.buffer_size
+        hw.set_access(Access::RWInterleaved)
+            .map_err(|e| AudioError::StreamBuild(format!("set_access: {}", e)))?;
+        hw.set_format(Format::s16())
+            .map_err(|e| AudioError::StreamBuild(format!("set_format S16_LE: {}", e)))?;
+        hw.set_channels(config.channels as u32)
+            .map_err(|e| AudioError::StreamBuild(format!("set_channels({}): {}", config.channels, e)))?;
+        hw.set_rate_near(config.sample_rate, ValueOr::Nearest)
+            .map_err(|e| AudioError::StreamBuild(format!("set_rate({}): {}", config.sample_rate, e)))?;
+
+        // Use a reasonable buffer/period — let ALSA pick defaults
+        hw.set_period_size_near(config.buffer_size as i64, ValueOr::Nearest)
+            .map_err(|e| AudioError::StreamBuild(format!("set_period_size: {}", e)))?;
+        hw.set_buffer_size_near((config.buffer_size * 4) as i64)
+            .map_err(|e| AudioError::StreamBuild(format!("set_buffer_size: {}", e)))?;
+
+        pcm.hw_params(&hw)
+            .map_err(|e| AudioError::StreamBuild(format!("hw_params: {}", e)))?;
+
+        let actual_rate = hw.get_rate()
+            .map_err(|e| AudioError::StreamBuild(format!("get_rate: {}", e)))?;
+        let actual_channels = hw.get_channels()
+            .map_err(|e| AudioError::StreamBuild(format!("get_channels: {}", e)))?;
+        let actual_period = hw.get_period_size()
+            .map_err(|e| AudioError::StreamBuild(format!("get_period_size: {}", e)))?;
+
+        // Drop HwParams before moving pcm into the thread
+        drop(hw);
+
+        tracing::info!(
+            "ALSA stream: {} Hz, {} ch, period {} frames",
+            actual_rate, actual_channels, actual_period,
         );
 
         // Create channels for samples and stop signal
         let (sample_tx, sample_rx) = bounded::<Vec<f32>>(32);
         let (stop_tx, stop_rx) = bounded::<()>(1);
 
-        let stream_config_clone = stream_config.clone();
-        let sample_format = supported_config.sample_format();
+        let channels = actual_channels as u16;
+        let period_frames = actual_period as usize;
 
-        // Spawn the audio thread
+        // Spawn the blocking read thread
         let thread_handle = thread::Builder::new()
             .name("audio-capture".to_string())
             .spawn(move || {
-                run_audio_thread(device, stream_config_clone, sample_format, sample_tx, stop_rx);
+                run_alsa_thread(pcm, channels, period_frames, sample_tx, stop_rx);
             })
             .map_err(|e| AudioError::StreamBuild(format!("Failed to spawn audio thread: {}", e)))?;
 
         Ok(Self {
             sample_rx,
             stop_tx,
-            config: stream_config,
+            sample_rate: actual_rate,
             _thread_handle: Some(thread_handle),
         })
     }
 
-    /// Get the next batch of audio samples (non-blocking)
+    /// Get the next batch of audio samples (non-blocking).
     pub async fn get_samples(&self) -> Result<Vec<f32>, RustuberError> {
-        // Use a small timeout to not block forever
         match self.sample_rx.try_recv() {
             Ok(samples) => Ok(samples),
             Err(crossbeam_channel::TryRecvError::Empty) => {
-                // No samples ready, that's fine
                 tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 Ok(Vec::new())
             }
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                Err(AudioError::StreamBuild("Stream disconnected".to_string()).into())
+                Err(AudioError::StreamBuild("Audio stream disconnected".to_string()).into())
             }
         }
     }
 
-    /// Get the stream configuration
-    pub fn config(&self) -> &StreamConfig {
-        &self.config
-    }
-
-    /// Get the sample rate
+    /// Get the sample rate.
     pub fn sample_rate(&self) -> u32 {
-        self.config.sample_rate.0
+        self.sample_rate
     }
 }
 
 impl Drop for AudioCapture {
     fn drop(&mut self) {
-        // Signal the audio thread to stop
         let _ = self.stop_tx.send(());
     }
 }
 
-/// Run the audio capture in a dedicated thread
-fn run_audio_thread(
-    device: Device,
-    config: StreamConfig,
-    sample_format: cpal::SampleFormat,
+/// Downmix interleaved multi-channel f32 samples to mono.
+fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let ch = channels as usize;
+    samples
+        .chunks_exact(ch)
+        .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+        .collect()
+}
+
+/// Blocking ALSA read loop.
+fn run_alsa_thread(
+    pcm: PCM,
+    channels: u16,
+    period_frames: usize,
     sample_tx: Sender<Vec<f32>>,
     stop_rx: Receiver<()>,
 ) {
-    let stream = match build_input_stream(&device, &config, sample_format, sample_tx) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to build audio stream: {}", e);
-            return;
-        }
-    };
+    let ch = channels as usize;
+    // Buffer for one period of interleaved i16 samples
+    let mut buf = vec![0i16; period_frames * ch];
 
-    if let Err(e) = stream.play() {
-        tracing::error!("Failed to start audio stream: {}", e);
+    // ALSA requires prepare before reading
+    if let Err(e) = pcm.prepare() {
+        tracing::error!("ALSA prepare failed: {}", e);
         return;
     }
 
     tracing::debug!("Audio capture thread started");
 
-    // Wait for stop signal
-    let _ = stop_rx.recv();
+    loop {
+        // Check stop signal (non-blocking)
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
 
-    tracing::debug!("Audio capture thread stopping");
-    drop(stream);
-}
+        let io = match pcm.io_i16() {
+            Ok(io) => io,
+            Err(e) => {
+                tracing::error!("Failed to get ALSA I/O: {}", e);
+                break;
+            }
+        };
 
-/// Find an audio device by name
-fn find_device_by_name(host: &cpal::Host, name: &str) -> Result<Device, RustuberError> {
-    let devices = host
-        .input_devices()
-        .map_err(|e| AudioError::DeviceEnumeration(e.to_string()))?;
+        // Blocking read — returns number of frames read
+        match io.readi(&mut buf) {
+            Ok(frames) => {
+                let sample_count = frames as usize * ch;
+                // Convert i16 → f32
+                let float_samples: Vec<f32> = buf[..sample_count]
+                    .iter()
+                    .map(|&s| s as f32 / i16::MAX as f32)
+                    .collect();
 
-    for device in devices {
-        if let Ok(device_name) = device.name() {
-            if device_name.contains(name) || name.contains(&device_name) {
-                return Ok(device);
+                let mut mono = if channels > 1 {
+                    downmix_to_mono(&float_samples, channels)
+                } else {
+                    float_samples
+                };
+
+                // Remove DC offset (digital mics often have a large constant bias)
+                let mean = mono.iter().sum::<f32>() / mono.len() as f32;
+                for s in mono.iter_mut() {
+                    *s -= mean;
+                }
+
+                let _ = sample_tx.try_send(mono);
+            }
+            Err(e) => {
+                // Try to recover from buffer overrun/underrun
+                tracing::debug!("ALSA read error (recovering): {}", e);
+                if let Err(e2) = pcm.try_recover(e, true) {
+                    tracing::error!("ALSA recovery failed: {}", e2);
+                    break;
+                }
             }
         }
     }
 
-    Err(AudioError::NoDeviceFound.into())
+    tracing::debug!("Audio capture thread stopping");
 }
 
-/// Build input stream based on sample format
-fn build_input_stream(
-    device: &Device,
-    config: &StreamConfig,
-    sample_format: cpal::SampleFormat,
-    tx: Sender<Vec<f32>>,
-) -> Result<Stream, RustuberError> {
-    let err_fn = |err| tracing::error!("Audio stream error: {}", err);
-
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let _ = tx.try_send(data.to_vec());
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            config,
-            move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| s as f32 / i16::MAX as f32)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            config,
-            move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::U8 => device.build_input_stream(
-            config,
-            move |data: &[u8], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| (s as f32 / 128.0) - 1.0)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::I8 => device.build_input_stream(
-            config,
-            move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| s as f32 / i8::MAX as f32)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::I32 => device.build_input_stream(
-            config,
-            move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| s as f32 / i32::MAX as f32)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::F64 => device.build_input_stream(
-            config,
-            move |data: &[f64], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data.iter().map(|&s| s as f32).collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::U32 => device.build_input_stream(
-            config,
-            move |data: &[u32], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| (s as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::I64 => device.build_input_stream(
-            config,
-            move |data: &[i64], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| (s as f64 / i64::MAX as f64) as f32)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::U64 => device.build_input_stream(
-            config,
-            move |data: &[u64], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|&s| (s as f64 / u64::MAX as f64 * 2.0 - 1.0) as f32)
-                    .collect();
-                let _ = tx.try_send(samples);
-            },
-            err_fn,
-            None,
-        ),
-        _ => {
-            return Err(AudioError::UnsupportedConfig(format!(
-                "Unsupported sample format: {:?}",
-                sample_format
-            ))
-            .into());
-        }
-    }
-    .map_err(|e| AudioError::StreamBuild(e.to_string()))?;
-
-    Ok(stream)
-}
-
-/// List all available input devices
+/// List all available ALSA input devices.
 pub fn list_input_devices() -> Vec<String> {
+    // Delegate to cpal for device enumeration (it handles PipeWire/JACK discovery)
+    use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
     let mut devices = Vec::new();
-
     if let Ok(input_devices) = host.input_devices() {
         for device in input_devices {
             if let Ok(name) = device.name() {
@@ -318,12 +218,12 @@ pub fn list_input_devices() -> Vec<String> {
             }
         }
     }
-
     devices
 }
 
-/// Get the default input device name
+/// Get the default input device name.
 pub fn default_input_device_name() -> Option<String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
     host.default_input_device()
         .and_then(|d| d.name().ok())

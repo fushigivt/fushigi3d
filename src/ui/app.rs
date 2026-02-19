@@ -51,6 +51,10 @@ pub struct RustuberApp {
     load_error: Option<String>,
     /// Active catppuccin theme flavor
     theme: catppuccin_egui::Theme,
+    /// Cached list of available audio input devices
+    audio_devices: Vec<String>,
+    /// Currently selected audio device name
+    selected_device: String,
 }
 
 impl RustuberApp {
@@ -80,6 +84,9 @@ impl RustuberApp {
             }
         };
 
+        let audio_devices = crate::audio::capture::list_input_devices();
+        let selected_device = config.audio.device.clone();
+
         let mut app = Self {
             state,
             state_rx,
@@ -93,6 +100,8 @@ impl RustuberApp {
             start_time,
             load_error: None,
             theme: catppuccin_egui::LATTE,
+            audio_devices,
+            selected_device,
         };
 
         // Try to load VRM model and initialize renderer
@@ -404,6 +413,30 @@ impl eframe::App for RustuberApp {
                 ui.selectable_value(&mut self.theme, catppuccin_egui::MACCHIATO, "Macchiato");
                 ui.selectable_value(&mut self.theme, catppuccin_egui::MOCHA, "Mocha");
             });
+
+            ui.separator();
+
+            // Audio input device picker
+            ui.label("Audio Input");
+            let prev_device = self.selected_device.clone();
+            egui::ComboBox::from_id_salt("audio_device")
+                .selected_text(&self.selected_device)
+                .show_ui(ui, |ui| {
+                    for name in &self.audio_devices {
+                        ui.selectable_value(&mut self.selected_device, name.clone(), name);
+                    }
+                });
+            if self.selected_device != prev_device {
+                let new_device = self.selected_device.clone();
+                let state = self.state.clone();
+                let rt = tokio::runtime::Handle::current();
+                rt.spawn(async move {
+                    let mut config = state.config.write().await;
+                    config.audio.device = new_device;
+                    drop(config);
+                    state.signal_audio_restart();
+                });
+            }
 
             ui.separator();
 

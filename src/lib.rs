@@ -45,6 +45,8 @@ pub struct AppState {
     pub obs_reconnect: Notify,
     /// Config changed signal
     pub config_changed: Notify,
+    /// Audio pipeline restart signal (device change)
+    pub audio_restart: Notify,
     /// Audio energy level in dB (stored as f32 bits in AtomicU32)
     pub audio_energy_db: AtomicU32,
     /// VAD confidence (0.0–1.0, stored as f32 bits in AtomicU32)
@@ -68,6 +70,7 @@ impl AppState {
             obs_scenes: RwLock::new(Vec::new()),
             obs_reconnect: Notify::new(),
             config_changed: Notify::new(),
+            audio_restart: Notify::new(),
             audio_energy_db: AtomicU32::new(f32::to_bits(-100.0)),
             audio_vad_confidence: AtomicU32::new(f32::to_bits(0.0)),
         })
@@ -129,6 +132,16 @@ impl AppState {
     /// Wait for config change signal
     pub async fn wait_config_changed(&self) {
         self.config_changed.notified().await;
+    }
+
+    /// Signal the audio pipeline to restart (e.g. after device change)
+    pub fn signal_audio_restart(&self) {
+        self.audio_restart.notify_one();
+    }
+
+    /// Wait for audio restart signal
+    pub async fn wait_audio_restart(&self) {
+        self.audio_restart.notified().await;
     }
 
     /// Update audio level metrics from the audio pipeline
