@@ -183,7 +183,7 @@ pub struct VadConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
-            provider: VadProvider::Energy,
+            provider: VadProvider::Silero,
             silero_threshold: 0.5,
             webrtc_mode: 2,
             energy_threshold_db: -40.0,
@@ -208,7 +208,7 @@ pub enum VadProvider {
 
 impl Default for VadProvider {
     fn default() -> Self {
-        Self::Energy
+        Self::Silero
     }
 }
 

@@ -331,7 +331,10 @@ async fn run_audio_pipeline(state: Arc<AppState>) -> anyhow::Result<()> {
                 }
                 _ = state.wait_audio_restart() => {
                     info!("Audio device changed, restarting pipeline");
-                    break; // breaks inner loop, outer loop recreates pipeline
+                    break; // breaks inner loop; pipeline is dropped at end of
+                           // outer-loop body — AudioCapture::drop() joins the
+                           // capture thread so the ALSA device is fully released
+                           // before the next iteration reopens it.
                 }
                 _ = shutdown_rx.recv() => {
                     info!("Audio pipeline shutting down");

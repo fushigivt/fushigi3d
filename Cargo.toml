@@ -13,6 +13,7 @@ signal-smooth = { path = "../signal-smooth" }
 # Audio & VAD
 cpal = "0.15"
 alsa = "0.9"
+voice_activity_detector = { version = "0.2", optional = true }
 
 # OBS WebSocket
 obws = "0.14"
@@ -83,7 +84,8 @@ urlencoding = "2"
 tempfile = "3"
 
 [features]
-default = []
+default = ["silero-vad"]
+silero-vad = ["dep:voice_activity_detector"]
 native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer"]
 
 [profile.release]

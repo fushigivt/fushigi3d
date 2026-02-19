@@ -14,8 +14,9 @@ channels = 1
 buffer_size = 512
 
 [vad]
-# VAD provider: "energy", "silero", "webrtc", or "remote"
-provider = "energy"
+# VAD provider: "silero" (default, neural-network) or "energy" (lightweight fallback)
+# Also supports "webrtc" and "remote" (not yet implemented)
+provider = "silero"
 # Silero VAD threshold (0.0 - 1.0)
 silero_threshold = 0.5
 # WebRTC VAD mode (0-3, higher = more aggressive)

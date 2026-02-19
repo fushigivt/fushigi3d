@@ -8,6 +8,7 @@ use eframe::egui;
 
 use crate::avatar::assets::AssetManager;
 use crate::avatar::AvatarState;
+use crate::config::VadProvider;
 use crate::AppState;
 
 use super::animation;
@@ -62,6 +63,8 @@ pub struct RustuberApp {
     tuning: crate::config::TrackingTuning,
     /// Last frame timestamp for computing dt
     last_frame: Instant,
+    /// Currently selected VAD provider
+    selected_vad: VadProvider,
 }
 
 impl RustuberApp {
@@ -98,6 +101,8 @@ impl RustuberApp {
         let mode = SmoothingMode::from_str(&tuning.smoothing_mode);
         let smoother = TrackingSmoother::new(mode, &tuning);
 
+        let selected_vad = config.vad.provider;
+
         let mut app = Self {
             state,
             state_rx,
@@ -116,6 +121,7 @@ impl RustuberApp {
             smoother,
             tuning,
             last_frame: Instant::now(),
+            selected_vad,
         };
 
         // Try to load VRM model and initialize renderer
@@ -457,6 +463,27 @@ impl eframe::App for RustuberApp {
                 rt.spawn(async move {
                     let mut config = state.config.write().await;
                     config.audio.device = new_device;
+                    drop(config);
+                    state.signal_audio_restart();
+                });
+            }
+
+            ui.separator();
+
+            // VAD provider toggle
+            ui.label("VAD Engine");
+            let prev_vad = self.selected_vad;
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.selected_vad, VadProvider::Silero, "Silero");
+                ui.selectable_value(&mut self.selected_vad, VadProvider::Energy, "Energy");
+            });
+            if self.selected_vad != prev_vad {
+                let new_provider = self.selected_vad;
+                let state = self.state.clone();
+                let rt = tokio::runtime::Handle::current();
+                rt.spawn(async move {
+                    let mut config = state.config.write().await;
+                    config.vad.provider = new_provider;
                     drop(config);
                     state.signal_audio_restart();
                 });

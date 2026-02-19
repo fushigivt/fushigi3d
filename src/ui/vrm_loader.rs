@@ -289,19 +289,54 @@ fn camel_to_lower(s: &str) -> String {
     result
 }
 
-/// Parse morph target names from mesh extras JSON.
+/// Parse morph target names from mesh extras JSON, stripping any shared prefix.
 fn parse_morph_target_names(mesh: &gltf::Mesh) -> Vec<String> {
     if let Some(extras) = mesh.extras().as_ref() {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(extras.get()) {
             if let Some(names) = val.get("targetNames").and_then(|v| v.as_array()) {
-                return names
+                let raw: Vec<String> = names
                     .iter()
                     .filter_map(|n| n.as_str().map(String::from))
                     .collect();
+                return strip_morph_prefixes(raw);
             }
         }
     }
     Vec::new()
+}
+
+/// Strip a shared dot-delimited prefix from morph target names.
+///
+/// Many VRM models store morph names as `"Face_Blendshape.Fcl_MTH_A"` where
+/// `"Face_Blendshape."` is a mesh-level prefix. The `BlendshapeMapper` looks up
+/// bare names like `"Fcl_MTH_A"`, so we strip the prefix here.
+///
+/// The prefix is only stripped when *all* names share the same `<something>.`
+/// prefix. If names have no dot or mixed prefixes, they're returned as-is.
+fn strip_morph_prefixes(names: Vec<String>) -> Vec<String> {
+    if names.len() < 2 {
+        return names;
+    }
+
+    // Find the first dot-prefix
+    let first_dot = match names[0].find('.') {
+        Some(pos) => pos,
+        None => return names,
+    };
+    let prefix_len = first_dot + 1; // includes the dot
+
+    // Check all names share this prefix
+    let prefix = &names[0][..prefix_len];
+    let all_share = names.iter().all(|n| n.starts_with(prefix));
+    if !all_share {
+        return names;
+    }
+
+    // Strip the prefix
+    names
+        .into_iter()
+        .map(|n| n[prefix_len..].to_string())
+        .collect()
 }
 
 /// Read morph target position deltas for a primitive.
@@ -346,6 +381,15 @@ mod tests {
             "Expected morph target names"
         );
 
+        // Morph names should not contain dot-prefixes after stripping
+        for name in &model.morph_target_names {
+            assert!(
+                !name.contains('.'),
+                "Morph name '{}' should not contain '.' after prefix stripping",
+                name
+            );
+        }
+
         // Should have a skeleton
         assert!(!model.skins.is_empty(), "Expected at least one skin");
 
@@ -368,5 +412,66 @@ mod tests {
             !model.meshes[0].primitives[0].positions.is_empty(),
             "Body primitives should have vertices"
         );
+    }
+
+    #[test]
+    fn test_strip_morph_prefixes_shared() {
+        let names = vec![
+            "Face_Blendshape.Fcl_MTH_A".to_string(),
+            "Face_Blendshape.Fcl_MTH_I".to_string(),
+            "Face_Blendshape.Fcl_EYE_Close".to_string(),
+        ];
+        let stripped = strip_morph_prefixes(names);
+        assert_eq!(stripped, vec!["Fcl_MTH_A", "Fcl_MTH_I", "Fcl_EYE_Close"]);
+    }
+
+    #[test]
+    fn test_strip_morph_prefixes_no_dot() {
+        let names = vec![
+            "Fcl_MTH_A".to_string(),
+            "Fcl_MTH_I".to_string(),
+            "Fcl_EYE_Close".to_string(),
+        ];
+        let stripped = strip_morph_prefixes(names.clone());
+        assert_eq!(stripped, names, "Names without dots should pass through unchanged");
+    }
+
+    #[test]
+    fn test_strip_morph_prefixes_mixed() {
+        let names = vec![
+            "Face_Blendshape.Fcl_MTH_A".to_string(),
+            "Other_Mesh.Fcl_MTH_I".to_string(),
+            "Face_Blendshape.Fcl_EYE_Close".to_string(),
+        ];
+        let stripped = strip_morph_prefixes(names.clone());
+        assert_eq!(stripped, names, "Mixed prefixes should not be stripped");
+    }
+
+    #[test]
+    fn test_load_alicia_model() {
+        let model_path = "assets/test/AliciaSolid.vrm";
+        if !std::path::Path::new(model_path).exists() {
+            eprintln!("Skipping test: AliciaSolid.vrm not found (run scripts/download_test_model.sh)");
+            return;
+        }
+
+        let model = VrmModel::load(model_path).expect("Failed to load AliciaSolid");
+
+        // Should have humanoid bones including fingers
+        assert!(model.bone_to_node.contains_key("head"), "Expected 'head' bone");
+        assert!(model.bone_to_node.contains_key("hips"), "Expected 'hips' bone");
+        assert!(
+            model.bone_to_node.contains_key("leftIndexProximal"),
+            "Expected finger bones"
+        );
+
+        // Morph names should be bare (no dot prefix)
+        for name in &model.morph_target_names {
+            assert!(
+                !name.contains('.'),
+                "Morph name '{}' should not contain '.'",
+                name
+            );
+        }
     }
 }

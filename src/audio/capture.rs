@@ -120,7 +120,13 @@ impl AudioCapture {
 
 impl Drop for AudioCapture {
     fn drop(&mut self) {
+        // Signal the capture thread to stop
         let _ = self.stop_tx.send(());
+        // Wait for the thread to finish so the ALSA device is fully released
+        // before anything tries to reopen it.
+        if let Some(handle) = self._thread_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 

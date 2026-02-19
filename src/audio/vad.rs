@@ -1,7 +1,12 @@
 //! Voice Activity Detection (VAD) processing
+//!
+//! Supports Silero VAD (neural-network, default) with automatic fallback to
+//! a simple energy-based detector.
 
 use crate::config::{VadConfig, VadProvider};
 use crate::error::RustuberError;
+#[cfg(feature = "silero-vad")]
+use crate::error::AudioError;
 use std::time::{Duration, Instant};
 
 /// Voice activity detection result
@@ -15,6 +20,8 @@ pub struct VoiceActivity {
     pub energy_db: f32,
     /// Duration of current state
     pub duration: Duration,
+    /// Which provider actually produced this result
+    pub provider: VadProvider,
 }
 
 impl Default for VoiceActivity {
@@ -24,9 +31,140 @@ impl Default for VoiceActivity {
             confidence: 0.0,
             energy_db: -100.0,
             duration: Duration::ZERO,
+            provider: VadProvider::Energy,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Inner VAD implementations
+// ---------------------------------------------------------------------------
+
+enum VadInner {
+    Energy(EnergyVad),
+    #[cfg(feature = "silero-vad")]
+    Silero(SileroVad),
+}
+
+// ---------------------------------------------------------------------------
+// Silero VAD wrapper
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "silero-vad")]
+struct SileroVad {
+    detector: voice_activity_detector::VoiceActivityDetector,
+    threshold: f32,
+    is_speech: bool,
+    last_speech_frame: Instant,
+    hangover: Duration,
+    /// Accumulator so the model always receives exactly 512 samples.
+    /// Feeding truncated/padded chunks corrupts the RNN's internal state.
+    buffer: Vec<f32>,
+    /// Most recent probability from the last complete 512-sample chunk.
+    last_probability: f32,
+}
+
+#[cfg(feature = "silero-vad")]
+impl SileroVad {
+    fn new(config: &VadConfig) -> Result<Self, RustuberError> {
+        let detector = voice_activity_detector::VoiceActivityDetector::builder()
+            .sample_rate(16000)
+            .chunk_size(512usize)
+            .build()
+            .map_err(|e| AudioError::VadInit(format!("Silero VAD init failed: {}", e)))?;
+
+        Ok(Self {
+            detector,
+            threshold: config.silero_threshold,
+            is_speech: false,
+            last_speech_frame: Instant::now(),
+            hangover: Duration::from_millis(config.release_ms as u64),
+            buffer: Vec::with_capacity(1024),
+            last_probability: 0.0,
+        })
+    }
+
+    fn process(&mut self, samples: &[f32]) -> (bool, f32, f32) {
+        // Compute RMS energy for the UI meter (Silero doesn't expose this)
+        let energy_db = compute_energy_db(samples);
+
+        // Accumulate samples and process in exact 512-sample chunks
+        self.buffer.extend_from_slice(samples);
+        while self.buffer.len() >= 512 {
+            let chunk: Vec<f32> = self.buffer.drain(..512).collect();
+            self.last_probability = self.detector.predict(chunk.iter().copied());
+        }
+
+        let probability = self.last_probability;
+        let now = Instant::now();
+
+        if probability >= self.threshold {
+            self.last_speech_frame = now;
+            self.is_speech = true;
+        } else if self.is_speech && now.duration_since(self.last_speech_frame) >= self.hangover {
+            self.is_speech = false;
+        }
+
+        (self.is_speech, probability, energy_db)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Simple energy-based VAD (original implementation)
+// ---------------------------------------------------------------------------
+
+struct EnergyVad {
+    threshold_db: f32,
+    smoothed_energy: f32,
+    smoothing_factor: f32,
+}
+
+impl EnergyVad {
+    fn new(threshold_db: f32) -> Self {
+        Self {
+            threshold_db,
+            smoothed_energy: -100.0,
+            smoothing_factor: 0.3,
+        }
+    }
+
+    fn process(&mut self, samples: &[f32]) -> (bool, f32, f32) {
+        if samples.is_empty() {
+            return (false, 0.0, self.smoothed_energy);
+        }
+
+        // Calculate RMS energy
+        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+        let rms = (sum_sq / samples.len() as f32).sqrt();
+
+        // Convert to dB
+        let energy_db = if rms > 0.0 {
+            20.0 * rms.log10()
+        } else {
+            -100.0
+        };
+
+        // Apply smoothing
+        self.smoothed_energy = self.smoothing_factor * energy_db
+            + (1.0 - self.smoothing_factor) * self.smoothed_energy;
+
+        // Calculate confidence based on how far above threshold
+        let above_threshold = self.smoothed_energy - self.threshold_db;
+        let confidence = if above_threshold > 0.0 {
+            (above_threshold / 20.0).min(1.0) // Saturate at 20dB above threshold
+        } else {
+            0.0
+        };
+
+        let is_speech = self.smoothed_energy > self.threshold_db;
+
+        (is_speech, confidence, self.smoothed_energy)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VadProcessor — public API
+// ---------------------------------------------------------------------------
 
 /// VAD processor that supports multiple backends
 pub struct VadProcessor {
@@ -36,25 +174,52 @@ pub struct VadProcessor {
     state_start: Instant,
     speech_start: Option<Instant>,
     silence_start: Option<Instant>,
-}
-
-enum VadInner {
-    Energy(EnergyVad),
-    // Future: Silero, WebRTC
+    active_provider: VadProvider,
 }
 
 impl VadProcessor {
     /// Create a new VAD processor
     pub fn new(config: &VadConfig) -> Result<Self, RustuberError> {
-        let inner = match config.provider {
-            VadProvider::Energy => VadInner::Energy(EnergyVad::new(config.energy_threshold_db)),
+        let (inner, active_provider) = match config.provider {
             VadProvider::Silero => {
-                tracing::warn!("Silero VAD not yet implemented, falling back to energy-based");
-                VadInner::Energy(EnergyVad::new(config.energy_threshold_db))
+                #[cfg(feature = "silero-vad")]
+                {
+                    match SileroVad::new(config) {
+                        Ok(s) => (VadInner::Silero(s), VadProvider::Silero),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Silero VAD init failed ({}), falling back to energy VAD",
+                                e
+                            );
+                            (
+                                VadInner::Energy(EnergyVad::new(config.energy_threshold_db)),
+                                VadProvider::Energy,
+                            )
+                        }
+                    }
+                }
+                #[cfg(not(feature = "silero-vad"))]
+                {
+                    tracing::warn!(
+                        "Silero VAD requested but silero-vad feature not enabled, \
+                         falling back to energy VAD"
+                    );
+                    (
+                        VadInner::Energy(EnergyVad::new(config.energy_threshold_db)),
+                        VadProvider::Energy,
+                    )
+                }
             }
+            VadProvider::Energy => (
+                VadInner::Energy(EnergyVad::new(config.energy_threshold_db)),
+                VadProvider::Energy,
+            ),
             VadProvider::WebRtc => {
-                tracing::warn!("WebRTC VAD not yet implemented, falling back to energy-based");
-                VadInner::Energy(EnergyVad::new(config.energy_threshold_db))
+                tracing::warn!("WebRTC VAD not yet implemented, falling back to energy VAD");
+                (
+                    VadInner::Energy(EnergyVad::new(config.energy_threshold_db)),
+                    VadProvider::Energy,
+                )
             }
         };
 
@@ -65,6 +230,7 @@ impl VadProcessor {
             state_start: Instant::now(),
             speech_start: None,
             silence_start: Some(Instant::now()),
+            active_provider,
         })
     }
 
@@ -72,6 +238,8 @@ impl VadProcessor {
     pub fn process(&mut self, samples: &[f32]) -> Result<VoiceActivity, RustuberError> {
         let (raw_is_speech, confidence, energy_db) = match &mut self.inner {
             VadInner::Energy(vad) => vad.process(samples),
+            #[cfg(feature = "silero-vad")]
+            VadInner::Silero(vad) => vad.process(samples),
         };
 
         // Apply attack/release timing
@@ -87,6 +255,7 @@ impl VadProcessor {
             confidence,
             energy_db,
             duration: self.state_start.elapsed(),
+            provider: self.active_provider,
         };
 
         Ok(self.current_activity)
@@ -139,6 +308,11 @@ impl VadProcessor {
         self.current_activity
     }
 
+    /// Which VAD provider is actually running (may differ from config if fallback occurred)
+    pub fn active_provider(&self) -> VadProvider {
+        self.active_provider
+    }
+
     /// Reset the VAD state
     pub fn reset(&mut self) {
         self.current_activity = VoiceActivity::default();
@@ -148,55 +322,28 @@ impl VadProcessor {
     }
 }
 
-/// Simple energy-based VAD
-struct EnergyVad {
-    threshold_db: f32,
-    smoothed_energy: f32,
-    smoothing_factor: f32,
-}
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
-impl EnergyVad {
-    fn new(threshold_db: f32) -> Self {
-        Self {
-            threshold_db,
-            smoothed_energy: -100.0,
-            smoothing_factor: 0.3,
-        }
+/// Compute RMS energy in dB from f32 samples.
+#[cfg(feature = "silero-vad")]
+fn compute_energy_db(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return -100.0;
     }
-
-    fn process(&mut self, samples: &[f32]) -> (bool, f32, f32) {
-        if samples.is_empty() {
-            return (false, 0.0, self.smoothed_energy);
-        }
-
-        // Calculate RMS energy
-        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-        let rms = (sum_sq / samples.len() as f32).sqrt();
-
-        // Convert to dB
-        let energy_db = if rms > 0.0 {
-            20.0 * rms.log10()
-        } else {
-            -100.0
-        };
-
-        // Apply smoothing
-        self.smoothed_energy = self.smoothing_factor * energy_db
-            + (1.0 - self.smoothing_factor) * self.smoothed_energy;
-
-        // Calculate confidence based on how far above threshold
-        let above_threshold = self.smoothed_energy - self.threshold_db;
-        let confidence = if above_threshold > 0.0 {
-            (above_threshold / 20.0).min(1.0) // Saturate at 20dB above threshold
-        } else {
-            0.0
-        };
-
-        let is_speech = self.smoothed_energy > self.threshold_db;
-
-        (is_speech, confidence, self.smoothed_energy)
+    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+    let rms = (sum_sq / samples.len() as f32).sqrt();
+    if rms > 0.0 {
+        20.0 * rms.log10()
+    } else {
+        -100.0
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -218,7 +365,6 @@ mod tests {
             .map(|i| (i as f32 * 0.1).sin() * 0.5)
             .collect();
         // Feed multiple frames so the smoothed energy converges past the threshold
-        // (smoothed_energy starts at -100 dB, needs several iterations to climb)
         let mut result = (false, 0.0f32, 0.0f32);
         for _ in 0..20 {
             result = vad.process(&speech);
@@ -228,9 +374,37 @@ mod tests {
     }
 
     #[test]
-    fn test_vad_processor() {
+    fn test_vad_processor_energy() {
+        let config = VadConfig {
+            provider: VadProvider::Energy,
+            ..Default::default()
+        };
+        let mut processor = VadProcessor::new(&config).unwrap();
+        assert_eq!(processor.active_provider(), VadProvider::Energy);
+
+        let silence: Vec<f32> = vec![0.0; 512];
+        let result = processor.process(&silence).unwrap();
+        assert!(!result.is_speech);
+    }
+
+    #[cfg(feature = "silero-vad")]
+    #[test]
+    fn test_compute_energy_db() {
+        assert_eq!(compute_energy_db(&[]), -100.0);
+        assert_eq!(compute_energy_db(&[0.0; 512]), -100.0);
+
+        // 1.0 amplitude → 0 dB
+        let loud: Vec<f32> = vec![1.0; 512];
+        let db = compute_energy_db(&loud);
+        assert!((db - 0.0).abs() < 0.1, "expected ~0 dB, got {}", db);
+    }
+
+    #[cfg(feature = "silero-vad")]
+    #[test]
+    fn test_vad_processor_silero() {
         let config = VadConfig::default();
         let mut processor = VadProcessor::new(&config).unwrap();
+        assert_eq!(processor.active_provider(), VadProvider::Silero);
 
         let silence: Vec<f32> = vec![0.0; 512];
         let result = processor.process(&silence).unwrap();
