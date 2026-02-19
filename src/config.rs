@@ -228,6 +228,111 @@ pub struct AvatarConfig {
     pub expressions: HashMap<String, String>,
     /// VRM 3D model configuration
     pub vrm: VrmConfig,
+    /// Tracking smoothing and sensitivity tuning
+    pub tracking: TrackingTuning,
+}
+
+/// Tracking smoothing and sensitivity tuning parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackingTuning {
+    /// Smoothing algorithm: "spring", "one_euro", or "none"
+    #[serde(default = "default_smoothing_mode")]
+    pub smoothing_mode: String,
+
+    // --- Head sensitivity ---
+    /// Overall head rotation multiplier
+    #[serde(default = "default_1_4")]
+    pub head_sensitivity: f32,
+    /// Per-axis scaling
+    #[serde(default = "default_1_0")]
+    pub pitch_scale: f32,
+    #[serde(default = "default_1_0")]
+    pub yaw_scale: f32,
+    #[serde(default = "default_1_0")]
+    pub roll_scale: f32,
+
+    // --- Blendshape sensitivity ---
+    #[serde(default = "default_1_2")]
+    pub blendshape_sensitivity: f32,
+
+    // --- Spring halflife (seconds) ---
+    #[serde(default = "default_0_08")]
+    pub head_halflife: f32,
+    #[serde(default = "default_0_12")]
+    pub blendshape_halflife: f32,
+    #[serde(default = "default_0_04")]
+    pub blink_halflife: f32,
+
+    // --- 1-Euro filter params ---
+    #[serde(default = "default_1_5")]
+    pub head_min_cutoff: f32,
+    #[serde(default = "default_0_05")]
+    pub head_beta: f32,
+    #[serde(default = "default_0_005")]
+    pub blendshape_min_cutoff: f32,
+    #[serde(default = "default_15_0")]
+    pub blendshape_beta: f32,
+    #[serde(default = "default_0_8")]
+    pub blink_min_cutoff: f32,
+    #[serde(default = "default_10_0")]
+    pub blink_beta: f32,
+
+    // --- Deadzones ---
+    #[serde(default = "default_0_5")]
+    pub head_deadzone: f32,
+    #[serde(default = "default_0_02")]
+    pub blendshape_deadzone: f32,
+
+    // --- Expression transitions ---
+    #[serde(default = "default_0_4")]
+    pub expression_fade_duration: f32,
+    #[serde(default = "default_easing")]
+    pub expression_easing: String,
+}
+
+fn default_smoothing_mode() -> String { "spring".to_string() }
+fn default_easing() -> String { "quad_in_out".to_string() }
+fn default_1_4() -> f32 { 1.4 }
+fn default_1_2() -> f32 { 1.2 }
+fn default_1_0() -> f32 { 1.0 }
+fn default_0_08() -> f32 { 0.08 }
+fn default_0_12() -> f32 { 0.12 }
+fn default_0_04() -> f32 { 0.04 }
+fn default_1_5() -> f32 { 1.5 }
+fn default_0_05() -> f32 { 0.05 }
+fn default_0_005() -> f32 { 0.005 }
+fn default_15_0() -> f32 { 15.0 }
+fn default_0_8() -> f32 { 0.8 }
+fn default_10_0() -> f32 { 10.0 }
+fn default_0_5() -> f32 { 0.5 }
+fn default_0_02() -> f32 { 0.02 }
+fn default_0_4() -> f32 { 0.4 }
+
+impl Default for TrackingTuning {
+    fn default() -> Self {
+        Self {
+            smoothing_mode: default_smoothing_mode(),
+            head_sensitivity: default_1_4(),
+            pitch_scale: default_1_0(),
+            yaw_scale: default_1_0(),
+            roll_scale: default_1_0(),
+            blendshape_sensitivity: default_1_2(),
+            head_halflife: default_0_08(),
+            blendshape_halflife: default_0_12(),
+            blink_halflife: default_0_04(),
+            head_min_cutoff: default_1_5(),
+            head_beta: default_0_05(),
+            blendshape_min_cutoff: default_0_005(),
+            blendshape_beta: default_15_0(),
+            blink_min_cutoff: default_0_8(),
+            blink_beta: default_10_0(),
+            head_deadzone: default_0_5(),
+            blendshape_deadzone: default_0_02(),
+            expression_fade_duration: default_0_4(),
+            expression_easing: default_easing(),
+        }
+    }
 }
 
 /// VRM 3D model rendering configuration
@@ -266,6 +371,7 @@ impl Default for AvatarConfig {
             states,
             expressions,
             vrm: VrmConfig::default(),
+            tracking: TrackingTuning::default(),
         }
     }
 }

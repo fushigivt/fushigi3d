@@ -1169,6 +1169,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "easer"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba524f8b83c9c5bde02c2bb1627de9d1f81980489a6d54168cdfd08c258f917"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4021,6 +4030,7 @@ dependencies = [
  "clap",
  "cpal",
  "crossbeam-channel",
+ "easer",
  "eframe",
  "egui_extras",
  "futures",
@@ -4034,6 +4044,7 @@ dependencies = [
  "rosc",
  "serde",
  "serde_json",
+ "signal-smooth",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -4309,6 +4320,10 @@ dependencies = [
  "errno",
  "libc",
 ]
+
+[[package]]
+name = "signal-smooth"
+version = "0.1.0"
 
 [[package]]
 name = "simd-adler32"

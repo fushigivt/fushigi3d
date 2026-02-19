@@ -31,41 +31,45 @@ impl BlendshapeMapper {
 
     /// Convert ARKit blendshapes to a VRM morph weight array.
     ///
+    /// `sensitivity` scales all raw ARKit values before mapping (e.g. 1.2 = 20% boost).
     /// Returns a Vec of length `num_targets` with weights in [0.0, 1.0].
-    pub fn map_blendshapes(&self, arkit: &HashMap<String, f32>) -> Vec<f32> {
+    pub fn map_blendshapes(&self, arkit: &HashMap<String, f32>, sensitivity: f32) -> Vec<f32> {
         let mut weights = vec![0.0f32; self.num_targets];
 
+        // Apply sensitivity multiplier to raw values via helper
+        let get = |key: &str| -> f32 { Self::get(arkit, key) * sensitivity };
+
         // Direct mappings: ARKit name → VRM morph target name
-        self.set_weight(&mut weights, "Fcl_MTH_A", Self::get(arkit, "jawOpen"));
-        self.set_weight(&mut weights, "Fcl_MTH_U", Self::get(arkit, "mouthPucker"));
-        self.set_weight(&mut weights, "Fcl_MTH_O", Self::get(arkit, "mouthFunnel"));
+        self.set_weight(&mut weights, "Fcl_MTH_A", get("jawOpen"));
+        self.set_weight(&mut weights, "Fcl_MTH_U", get("mouthPucker"));
+        self.set_weight(&mut weights, "Fcl_MTH_O", get("mouthFunnel"));
 
         // mouthStretchLeft/Right → Fcl_MTH_I (average)
-        let stretch_l = Self::get(arkit, "mouthStretchLeft");
-        let stretch_r = Self::get(arkit, "mouthStretchRight");
+        let stretch_l = get("mouthStretchLeft");
+        let stretch_r = get("mouthStretchRight");
         self.set_weight(&mut weights, "Fcl_MTH_I", (stretch_l + stretch_r) * 0.5);
 
         // mouthSmileLeft/Right → Fcl_MTH_E (×0.6)
-        let smile_l = Self::get(arkit, "mouthSmileLeft");
-        let smile_r = Self::get(arkit, "mouthSmileRight");
-        self.set_weight(&mut weights, "Fcl_MTH_E", (smile_l + smile_r) * 0.3);
+        let smile_l = get("mouthSmileLeft");
+        let smile_r = get("mouthSmileRight");
+        self.set_weight(&mut weights, "Fcl_MTH_E", (smile_l + smile_r) * 0.6);
 
         // Blink: average of left/right → Fcl_EYE_Close
-        let blink_l = Self::get(arkit, "eyeBlinkLeft");
-        let blink_r = Self::get(arkit, "eyeBlinkRight");
+        let blink_l = get("eyeBlinkLeft");
+        let blink_r = get("eyeBlinkRight");
         self.set_weight(&mut weights, "Fcl_EYE_Close", (blink_l + blink_r) * 0.5);
 
         // Derived emotions from blendshape combinations
         let avg_smile = (smile_l + smile_r) * 0.5;
-        if avg_smile > 0.5 {
-            self.set_weight(&mut weights, "Fcl_ALL_Joy", (avg_smile - 0.5) * 2.0);
+        if avg_smile > 0.35 {
+            self.set_weight(&mut weights, "Fcl_ALL_Joy", (avg_smile - 0.35) * 1.5);
         }
 
-        let eye_wide_l = Self::get(arkit, "eyeWideLeft");
-        let eye_wide_r = Self::get(arkit, "eyeWideRight");
-        let jaw_open = Self::get(arkit, "jawOpen");
+        let eye_wide_l = get("eyeWideLeft");
+        let eye_wide_r = get("eyeWideRight");
+        let jaw_open = get("jawOpen");
         let avg_eye_wide = (eye_wide_l + eye_wide_r) * 0.5;
-        if avg_eye_wide > 0.3 && jaw_open > 0.3 {
+        if avg_eye_wide > 0.2 && jaw_open > 0.2 {
             self.set_weight(
                 &mut weights,
                 "Fcl_ALL_Surprised",
@@ -73,14 +77,14 @@ impl BlendshapeMapper {
             );
         }
 
-        let brow_down_l = Self::get(arkit, "browDownLeft");
-        let brow_down_r = Self::get(arkit, "browDownRight");
+        let brow_down_l = get("browDownLeft");
+        let brow_down_r = get("browDownRight");
         let avg_brow_down = (brow_down_l + brow_down_r) * 0.5;
-        if avg_brow_down > 0.4 {
+        if avg_brow_down > 0.3 {
             self.set_weight(
                 &mut weights,
                 "Fcl_ALL_Angry",
-                (avg_brow_down - 0.4) * (1.0 / 0.6),
+                (avg_brow_down - 0.3) * 1.4,
             );
         }
 
@@ -143,7 +147,7 @@ mod tests {
         let mut arkit = HashMap::new();
         arkit.insert("jawOpen".to_string(), 0.8);
 
-        let weights = mapper.map_blendshapes(&arkit);
+        let weights = mapper.map_blendshapes(&arkit, 1.0);
         assert!((weights[36] - 0.8).abs() < 0.01, "Fcl_MTH_A should be 0.8");
     }
 
@@ -154,7 +158,7 @@ mod tests {
         arkit.insert("eyeBlinkLeft".to_string(), 0.6);
         arkit.insert("eyeBlinkRight".to_string(), 0.8);
 
-        let weights = mapper.map_blendshapes(&arkit);
+        let weights = mapper.map_blendshapes(&arkit, 1.0);
         assert!(
             (weights[12] - 0.7).abs() < 0.01,
             "Fcl_EYE_Close should be avg 0.7"
@@ -168,8 +172,8 @@ mod tests {
         arkit.insert("mouthSmileLeft".to_string(), 0.9);
         arkit.insert("mouthSmileRight".to_string(), 0.9);
 
-        let weights = mapper.map_blendshapes(&arkit);
-        // avg smile = 0.9, so Joy = (0.9 - 0.5) * 2.0 = 0.8
+        let weights = mapper.map_blendshapes(&arkit, 1.0);
+        // avg smile = 0.9, Joy = (0.9 - 0.35) * 1.5 = 0.825
         assert!(weights[3] > 0.7, "Fcl_ALL_Joy should be triggered");
     }
 
@@ -177,7 +181,7 @@ mod tests {
     fn test_empty_blendshapes() {
         let mapper = BlendshapeMapper::new(&sample_names());
         let arkit = HashMap::new();
-        let weights = mapper.map_blendshapes(&arkit);
+        let weights = mapper.map_blendshapes(&arkit, 1.0);
         assert!(weights.iter().all(|&w| w == 0.0));
     }
 }

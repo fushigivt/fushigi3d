@@ -12,6 +12,7 @@ mod animation;
 mod app;
 mod blendshape_map;
 mod renderer;
+mod smoothing;
 mod skinning;
 mod viewport;
 mod vrm_loader;

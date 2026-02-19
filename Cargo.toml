@@ -8,6 +8,7 @@ license = "AGPL-3.0-only"
 repository = ""
 
 [dependencies]
+signal-smooth = { path = "../signal-smooth" }
 
 # Audio & VAD
 cpal = "0.15"
@@ -55,6 +56,9 @@ bytemuck = { version = "1", features = ["derive"], optional = true }
 # Theming (optional, used with native-ui)
 catppuccin-egui = { version = "5.5", optional = true, default-features = false, features = ["egui31"] }
 
+# Easing curves (optional, used with native-ui for expression transitions)
+easer = { version = "0.3", optional = true }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -80,7 +84,7 @@ tempfile = "3"
 
 [features]
 default = []
-native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui"]
+native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer"]
 
 [profile.release]
 lto = true

@@ -54,6 +54,35 @@ angry = "expressions/angry.png"
 # Path to the VRM/GLB model file
 model_path = "assets/default/model.glb"
 
+# Tracking smoothing and sensitivity tuning
+[avatar.tracking]
+# Smoothing algorithm: "spring", "one_euro", or "none"
+smoothing_mode = "spring"
+# Overall head rotation multiplier (1.0 = raw tracking, 1.4 = 40% boost)
+head_sensitivity = 1.4
+pitch_scale = 1.0
+yaw_scale = 1.0
+roll_scale = 1.0
+# Blendshape sensitivity multiplier
+blendshape_sensitivity = 1.2
+# Spring halflife in seconds (lower = snappier)
+head_halflife = 0.08
+blendshape_halflife = 0.12
+blink_halflife = 0.04
+# 1-Euro filter parameters
+head_min_cutoff = 1.5
+head_beta = 0.05
+blendshape_min_cutoff = 0.005
+blendshape_beta = 15.0
+blink_min_cutoff = 0.8
+blink_beta = 10.0
+# Deadzone (values below this are faded to zero)
+head_deadzone = 0.5
+blendshape_deadzone = 0.02
+# Expression transition
+expression_fade_duration = 0.4
+expression_easing = "quad_in_out"
+
 [obs]
 # Enable OBS WebSocket integration
 enabled = false

@@ -14,6 +14,7 @@ use super::animation;
 use super::blendshape_map::BlendshapeMapper;
 use super::renderer::VrmRenderer;
 use super::skinning;
+use super::smoothing::{SmoothingMode, TrackingSmoother};
 use super::viewport::VrmViewportCallback;
 use super::vrm_loader::VrmModel;
 
@@ -55,6 +56,12 @@ pub struct RustuberApp {
     audio_devices: Vec<String>,
     /// Currently selected audio device name
     selected_device: String,
+    /// Tracking smoother for head rotation and blendshapes
+    smoother: TrackingSmoother,
+    /// Tracking tuning parameters (editable via UI)
+    tuning: crate::config::TrackingTuning,
+    /// Last frame timestamp for computing dt
+    last_frame: Instant,
 }
 
 impl RustuberApp {
@@ -87,6 +94,10 @@ impl RustuberApp {
         let audio_devices = crate::audio::capture::list_input_devices();
         let selected_device = config.audio.device.clone();
 
+        let tuning = config.avatar.tracking.clone();
+        let mode = SmoothingMode::from_str(&tuning.smoothing_mode);
+        let smoother = TrackingSmoother::new(mode, &tuning);
+
         let mut app = Self {
             state,
             state_rx,
@@ -102,6 +113,9 @@ impl RustuberApp {
             theme: catppuccin_egui::LATTE,
             audio_devices,
             selected_device,
+            smoother,
+            tuning,
+            last_frame: Instant::now(),
         };
 
         // Try to load VRM model and initialize renderer
@@ -308,13 +322,14 @@ impl RustuberApp {
     }
 
     /// Update skinning for the current frame.
-    fn update_skinning(&self, render_state: &eframe::egui_wgpu::RenderState) {
+    fn update_skinning(&mut self, render_state: &eframe::egui_wgpu::RenderState) {
+        // Clone Arcs so we can borrow &mut self.smoother later
         let model = match &self.model {
-            Some(m) => m,
+            Some(m) => m.clone(),
             None => return,
         };
         let renderer = match &self.renderer {
-            Some(r) => r,
+            Some(r) => r.clone(),
             None => return,
         };
         let mapper = match &self.mapper {
@@ -322,49 +337,58 @@ impl RustuberApp {
             None => return,
         };
 
+        // Compute frame dt
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame).as_secs_f32();
+        self.last_frame = now;
+
         let time = self.start_time.elapsed().as_secs_f32();
         let avatar = &self.cached_avatar;
 
-        // Map blendshapes
+        // Smooth blendshapes, then map
         let morph_weights = if avatar.blendshapes().is_empty() {
             vec![0.0f32; mapper.num_targets()]
         } else {
-            mapper.map_blendshapes(avatar.blendshapes())
+            let smoothed_bs =
+                self.smoother
+                    .smooth_blendshapes(avatar.blendshapes(), dt, &self.tuning);
+            mapper.map_blendshapes(&smoothed_bs, self.tuning.blendshape_sensitivity)
         };
 
-        // Head rotation for tracking (or None for idle animation)
+        // Smooth head rotation, then decide tracking vs idle
         let head_rot = {
             let r = avatar.head_rotation();
             if r[0].abs() < 0.01 && r[1].abs() < 0.01 && r[2].abs() < 0.01 {
                 None
             } else {
-                Some(r)
+                let smoothed = self.smoother.smooth_head(r, dt, &self.tuning);
+                Some(smoothed)
             }
         };
 
         // Compute animated bone rotations
         let bone_rotations =
-            animation::animated_pose(model, time, head_rot, avatar.is_speaking());
+            animation::animated_pose(&model, time, head_rot, avatar.is_speaking(), &self.tuning);
 
         // Forward kinematics
-        let world = skinning::compute_world_transforms(model, &bone_rotations);
+        let world = skinning::compute_world_transforms(&model, &bone_rotations);
 
         // Skin each mesh
         let mut skinned_meshes = Vec::with_capacity(model.meshes.len());
         for (mesh_idx, _mesh) in model.meshes.iter().enumerate() {
             // Face mesh (index 1) gets morph targets applied first
             let base = if mesh_idx == 1 {
-                skinning::apply_morph_targets(model, mesh_idx, &morph_weights)
+                skinning::apply_morph_targets(&model, mesh_idx, &morph_weights)
             } else {
-                skinning::base_positions(model, mesh_idx)
+                skinning::base_positions(&model, mesh_idx)
             };
 
-            let skinned = skinning::skin_vertices(model, mesh_idx, &base, &world);
+            let skinned = skinning::skin_vertices(&model, mesh_idx, &base, &world);
             skinned_meshes.push(skinned);
         }
 
         // Upload to GPU
-        renderer.update_vertices(&render_state.queue, model, &skinned_meshes);
+        renderer.update_vertices(&render_state.queue, &model, &skinned_meshes);
     }
 }
 
@@ -510,6 +534,71 @@ impl eframe::App for RustuberApp {
                     ui.label("no");
                 }
             });
+
+            ui.separator();
+
+            // Tracking tuning controls
+            ui.heading("Tracking");
+
+            // Smoothing mode selector
+            let current_mode = self.smoother.mode();
+            let mut selected_mode = current_mode;
+            ui.horizontal(|ui| {
+                ui.label("Smoothing:");
+                for mode in &SmoothingMode::ALL {
+                    ui.selectable_value(&mut selected_mode, *mode, mode.as_str());
+                }
+            });
+            if selected_mode != current_mode {
+                self.smoother.set_mode(selected_mode, &self.tuning);
+            }
+
+            ui.add(
+                egui::Slider::new(&mut self.tuning.head_sensitivity, 0.5..=3.0)
+                    .text("Head sensitivity"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.tuning.blendshape_sensitivity, 0.5..=2.5)
+                    .text("Expression sensitivity"),
+            );
+
+            // Mode-specific controls
+            match self.smoother.mode() {
+                SmoothingMode::Spring => {
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.head_halflife, 0.01..=0.5)
+                            .text("Head halflife"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.blendshape_halflife, 0.01..=0.5)
+                            .text("BS halflife"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.blink_halflife, 0.01..=0.2)
+                            .text("Blink halflife"),
+                    );
+                }
+                SmoothingMode::OneEuro => {
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.head_min_cutoff, 0.1..=10.0)
+                            .text("Head min cutoff"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.head_beta, 0.0..=1.0)
+                            .text("Head beta"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.blendshape_min_cutoff, 0.001..=1.0)
+                            .logarithmic(true)
+                            .text("BS min cutoff"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut self.tuning.blendshape_beta, 0.0..=30.0)
+                            .text("BS beta"),
+                    );
+                }
+                SmoothingMode::None => {}
+            }
 
             // In 2D mode, show the current asset key
             if self.view_mode == ViewMode::PngTuber2D {

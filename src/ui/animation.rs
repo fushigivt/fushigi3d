@@ -34,11 +34,13 @@ pub fn idle_pose(model: &VrmModel) -> HashMap<usize, Quat> {
 /// `time`: elapsed time in seconds (monotonic)
 /// `head_rotation_deg`: [pitch, yaw, roll] from tracking (degrees), or None for idle
 /// `is_speaking`: whether the avatar is currently speaking
+/// `tuning`: tracking sensitivity and scaling parameters
 pub fn animated_pose(
     model: &VrmModel,
     time: f32,
     head_rotation_deg: Option<[f32; 3]>,
     is_speaking: bool,
+    tuning: &crate::config::TrackingTuning,
 ) -> HashMap<usize, Quat> {
     let mut pose = idle_pose(model);
 
@@ -74,10 +76,10 @@ pub fn animated_pose(
     let (mut head_rx, mut head_ry, mut head_rz) = (0.0f32, 0.0f32, 0.0f32);
 
     if let Some([pitch, yaw, roll]) = head_rotation_deg {
-        // Convert from degrees to radians, apply 60/40 head/neck split
-        head_rx = pitch.to_radians();
-        head_ry = yaw.to_radians();
-        head_rz = roll.to_radians();
+        // Apply sensitivity and per-axis scaling, then convert to radians
+        head_rx = (pitch * tuning.head_sensitivity * tuning.pitch_scale).to_radians();
+        head_ry = (yaw * tuning.head_sensitivity * tuning.yaw_scale).to_radians();
+        head_rz = (roll * tuning.head_sensitivity * tuning.roll_scale).to_radians();
     } else {
         // Subtle idle head movement
         head_rx += (time * 0.7).sin() * 0.015;
@@ -90,20 +92,27 @@ pub fn animated_pose(
         head_rx += speak_nod;
     }
 
-    // Apply head rotation (60% to head)
+    // Apply head rotation (60% to head) using YXZ Euler order (VRM Y-up)
     if let Some(&head) = model.bone_to_node.get("head") {
         let rest = model.rest_rotations[head];
-        let hq = Quat::from_axis_angle(glam::Vec3::X, head_rx * 0.6)
-            * Quat::from_axis_angle(glam::Vec3::Y, head_ry * 0.6)
-            * Quat::from_axis_angle(glam::Vec3::Z, head_rz * 0.6);
+        let hq = Quat::from_euler(
+            glam::EulerRot::YXZ,
+            head_ry * 0.6,
+            head_rx * 0.6,
+            head_rz * 0.6,
+        );
         pose.insert(head, rest * hq);
     }
 
-    // Apply neck rotation (40% to neck)
+    // Apply neck rotation (40% to neck, including roll) using YXZ Euler order
     if let Some(&neck) = model.bone_to_node.get("neck") {
         let rest = model.rest_rotations[neck];
-        let nq = Quat::from_axis_angle(glam::Vec3::X, head_rx * 0.4)
-            * Quat::from_axis_angle(glam::Vec3::Y, head_ry * 0.4);
+        let nq = Quat::from_euler(
+            glam::EulerRot::YXZ,
+            head_ry * 0.4,
+            head_rx * 0.4,
+            head_rz * 0.4,
+        );
         pose.insert(neck, rest * nq);
     }
 
@@ -122,9 +131,11 @@ mod tests {
         }
         let model = VrmModel::load(model_path).unwrap();
 
+        let tuning = crate::config::TrackingTuning::default();
+
         // Should not panic with any input combination
-        let _pose1 = animated_pose(&model, 0.0, None, false);
-        let _pose2 = animated_pose(&model, 1.5, Some([10.0, -5.0, 2.0]), true);
-        let _pose3 = animated_pose(&model, 100.0, None, true);
+        let _pose1 = animated_pose(&model, 0.0, None, false, &tuning);
+        let _pose2 = animated_pose(&model, 1.5, Some([10.0, -5.0, 2.0]), true, &tuning);
+        let _pose3 = animated_pose(&model, 100.0, None, true, &tuning);
     }
 }
