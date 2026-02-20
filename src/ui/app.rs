@@ -68,6 +68,8 @@ pub struct RustuberApp {
     last_frame: Instant,
     /// Currently selected VAD provider
     selected_vad: VadProvider,
+    /// Camera distance for 3D viewport zoom (Z position)
+    camera_distance: f32,
 }
 
 impl RustuberApp {
@@ -126,6 +128,7 @@ impl RustuberApp {
             tuning,
             last_frame: Instant::now(),
             selected_vad,
+            camera_distance: 0.88,
         };
 
         // Try to load VRM model and initialize renderer
@@ -347,6 +350,8 @@ impl RustuberApp {
             Some(r) => r.clone(),
             None => return,
         };
+
+        renderer.set_camera_distance(self.camera_distance);
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -465,6 +470,19 @@ impl eframe::App for RustuberApp {
                 ui.selectable_value(&mut self.view_mode, ViewMode::Vrm3D, "3D (VRM)");
                 ui.selectable_value(&mut self.view_mode, ViewMode::PngTuber2D, "2D (PNG)");
             });
+
+            if self.view_mode == ViewMode::Vrm3D {
+                ui.horizontal(|ui| {
+                    ui.label("Zoom:");
+                    if ui.button("-").clicked() {
+                        self.camera_distance = (self.camera_distance + 0.05).min(3.0);
+                    }
+                    ui.label(format!("{:.2}", self.camera_distance));
+                    if ui.button("+").clicked() {
+                        self.camera_distance = (self.camera_distance - 0.05).max(0.3);
+                    }
+                });
+            }
 
             ui.separator();
 
@@ -696,8 +714,16 @@ impl eframe::App for RustuberApp {
                 ViewMode::Vrm3D => {
                     if let Some(renderer) = &self.renderer {
                         let available_size = ui.available_size();
-                        let (rect, _response) =
-                            ui.allocate_exact_size(available_size, egui::Sense::hover());
+                        let (rect, response) =
+                            ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
+
+                        if response.hovered() {
+                            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                            if scroll.abs() > 0.0 {
+                                self.camera_distance =
+                                    (self.camera_distance - scroll * 0.002).clamp(0.3, 3.0);
+                            }
+                        }
 
                         let ppp = ctx.pixels_per_point();
                         let vp_width = (available_size.x * ppp) as u32;

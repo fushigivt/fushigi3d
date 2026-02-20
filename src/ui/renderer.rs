@@ -71,6 +71,7 @@ struct OffscreenState {
     blit_bind_group: wgpu::BindGroup,
     offscreen_size: [u32; 2],
     projection_matrix: Mat4,
+    view_matrix: Mat4,
 }
 
 /// The VRM renderer. Holds all GPU resources for offscreen rendering.
@@ -90,8 +91,6 @@ pub struct VrmRenderer {
     sampler: wgpu::Sampler,
     // Scene layout
     scene_bind_group_layout: wgpu::BindGroupLayout,
-    // Camera
-    view_matrix: Mat4,
     // Light directions (normalized, in world space — pointing FROM light TO origin)
     lights: [LightInfo; 3],
     ambient: [f32; 4],
@@ -390,11 +389,11 @@ impl VrmRenderer {
                 blit_bind_group,
                 offscreen_size: [width, height],
                 projection_matrix,
+                view_matrix,
             }),
             blit_bind_group_layout,
             sampler,
             scene_bind_group_layout,
-            view_matrix,
             lights,
             ambient: [0.15, 0.15, 0.18, 1.0],
         }
@@ -444,6 +443,16 @@ impl VrmRenderer {
         state.projection_matrix = Mat4::perspective_rh(yfov, aspect, 0.01, 100.0);
     }
 
+    /// Set the camera distance (Z position) for zoom control.
+    pub fn set_camera_distance(&self, distance: f32) {
+        let mut state = self.offscreen.lock().unwrap();
+        state.view_matrix = Mat4::look_at_rh(
+            Vec3::new(0.0, 1.33, distance),
+            Vec3::new(0.0, 1.33, 0.0),
+            Vec3::Y,
+        );
+    }
+
     /// Update vertex buffers with skinned positions and base normals.
     ///
     /// `skinned_meshes`: per-mesh Vec of per-primitive Vec of skinned positions.
@@ -490,7 +499,7 @@ impl VrmRenderer {
     /// Render the scene offscreen. Call this in `prepare()`.
     pub fn render_offscreen(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let state = self.offscreen.lock().unwrap();
-        let mvp = state.projection_matrix * self.view_matrix;
+        let mvp = state.projection_matrix * state.view_matrix;
         let model_mat = Mat4::IDENTITY;
 
         // Update all uniform buffers
