@@ -81,6 +81,8 @@ impl MpData {
 
         if pkt.body_detected && !pkt.body_landmarks.is_empty() {
             state = state.with_body_landmarks(pkt.body_landmarks.clone());
+        } else {
+            state = state.with_body_landmarks(HashMap::new());
         }
 
         state

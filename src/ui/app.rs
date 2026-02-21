@@ -70,6 +70,12 @@ pub struct RustuberApp {
     selected_vad: VadProvider,
     /// Camera distance for 3D viewport zoom (Z position)
     camera_distance: f32,
+    /// Head-only mode: skip body IK, use procedural arms only
+    head_only: bool,
+    /// Manual head rotation override (bypass tracking)
+    head_override: bool,
+    /// Manual [pitch, yaw, roll] in degrees
+    head_override_rot: [f32; 3],
 }
 
 impl RustuberApp {
@@ -129,6 +135,9 @@ impl RustuberApp {
             last_frame: Instant::now(),
             selected_vad,
             camera_distance: 0.88,
+            head_only: false,
+            head_override: false,
+            head_override_rot: [0.0; 3],
         };
 
         // Try to load VRM model and initialize renderer
@@ -365,8 +374,10 @@ impl RustuberApp {
         let time = self.start_time.elapsed().as_secs_f32();
         let avatar = &self.cached_avatar;
 
-        // Smooth head rotation first (needed for eye occlusion compensation)
-        let head_rot = {
+        // Head rotation: use manual override or tracked data
+        let head_rot = if self.head_override {
+            Some(self.head_override_rot)
+        } else {
             let r = avatar.head_rotation();
             if r[0].abs() < 0.01 && r[1].abs() < 0.01 && r[2].abs() < 0.01 {
                 None
@@ -391,8 +402,8 @@ impl RustuberApp {
             mapper.map_blendshapes(&smoothed_bs, self.tuning.blendshape_sensitivity, head_yaw_rad)
         };
 
-        // Solve body IK if tracking data is available
-        let body_ik_rotations = if avatar.has_body_tracking() {
+        // Solve body IK if tracking data is available and not in head-only mode
+        let body_ik_rotations = if avatar.has_body_tracking() && !self.head_only {
             let smoothed = self
                 .smoother
                 .smooth_body_landmarks(avatar.body_landmarks(), dt, &self.tuning);
@@ -682,8 +693,31 @@ impl eframe::App for RustuberApp {
             }
 
             ui.separator();
+            ui.heading("Head Override");
+            ui.checkbox(&mut self.head_override, "Manual head pose");
+            if self.head_override {
+                ui.add(
+                    egui::Slider::new(&mut self.head_override_rot[0], -45.0..=45.0)
+                        .text("Pitch"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.head_override_rot[1], -45.0..=45.0)
+                        .text("Yaw"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.head_override_rot[2], -30.0..=30.0)
+                        .text("Roll"),
+                );
+                if ui.button("Reset to zero").clicked() {
+                    self.head_override_rot = [0.0; 3];
+                }
+            }
+
+            ui.separator();
             ui.heading("Body Tracking");
-            ui.add(
+            ui.checkbox(&mut self.head_only, "Head only (no arms)");
+            ui.add_enabled(
+                !self.head_only,
                 egui::Slider::new(&mut self.tuning.body_blend_factor, 0.0..=1.0)
                     .text("Body blend"),
             );

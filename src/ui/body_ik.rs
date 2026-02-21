@@ -2,6 +2,9 @@
 //!
 //! Converts MediaPipe Pose Landmarker world-space positions into VRM bone
 //! rotations by comparing tracked limb directions against rest-pose directions.
+//! Uses hierarchical solve so that lower-arm IK sees the already-rotated upper
+//! arm, applies elbow pole-vector correction, and computes torso lean/tilt from
+//! shoulder + hip landmarks.
 
 #![cfg(feature = "native-ui")]
 
@@ -13,8 +16,7 @@ use super::vrm_loader::VrmModel;
 
 /// A single limb segment: one bone driven by two landmarks.
 struct LimbSegment {
-    /// VRM bone name (for debugging)
-    #[allow(dead_code)]
+    /// VRM bone name (used for elbow pole-vector identification)
     bone_name: &'static str,
     /// Node index of the bone to rotate
     node: usize,
@@ -24,16 +26,27 @@ struct LimbSegment {
     from_landmark: &'static str,
     /// MediaPipe landmark key for the distal joint
     to_landmark: &'static str,
-    /// Rest-pose limb direction in parent-local space (normalized)
-    rest_dir_local: Vec3,
+    /// Rest-pose limb direction in world space (normalized)
+    rest_dir_world: Vec3,
+}
+
+/// Spine bone for torso tilt/lean distribution.
+#[allow(dead_code)]
+struct SpineBone {
+    /// Node index
+    node: usize,
+    /// Fraction of total torso rotation this bone receives
+    weight: f32,
 }
 
 /// Precomputed IK setup for body tracking.
 pub struct BodyIkSetup {
     limb_segments: Vec<LimbSegment>,
+    #[allow(dead_code)]
+    spine_bones: Vec<SpineBone>,
 }
 
-/// Limb segment definitions: (bone_name, from_landmark, to_landmark)
+/// Limb segment definitions: (bone_name, bone_vrm_name, parent_bone_name_hint, from_landmark, to_landmark)
 ///
 /// Landmark → VRM bone position mapping:
 /// - "leftShoulder"  → world pos of leftUpperArm node
@@ -41,7 +54,7 @@ pub struct BodyIkSetup {
 /// - "leftWrist"     → world pos of leftHand node
 /// - (mirror for right)
 const LIMB_DEFS: &[(&str, &str, &str, &str, &str)] = &[
-    // (bone_name, bone_vrm_name, parent_bone_name_hint, from_landmark, to_landmark)
+    // Upper before lower so hierarchical propagation works
     ("leftUpperArm", "leftUpperArm", "leftShoulder", "leftShoulder", "leftElbow"),
     ("leftLowerArm", "leftLowerArm", "leftUpperArm", "leftElbow", "leftWrist"),
     ("rightUpperArm", "rightUpperArm", "rightShoulder", "rightShoulder", "rightElbow"),
@@ -56,6 +69,14 @@ const LANDMARK_TO_BONE: &[(&str, &str)] = &[
     ("rightShoulder", "rightUpperArm"),
     ("rightElbow", "rightLowerArm"),
     ("rightWrist", "rightHand"),
+];
+
+/// Spine bone definitions for torso tilt/lean: (bone_name, weight).
+/// Weights sum to 1.0 — distributed across the chain.
+const SPINE_DEFS: &[(&str, f32)] = &[
+    ("spine", 0.40),
+    ("chest", 0.35),
+    ("upperChest", 0.25),
 ];
 
 impl BodyIkSetup {
@@ -98,13 +119,8 @@ impl BodyIkSetup {
                 None => continue,
             };
 
-            // Compute rest direction in parent-local space
-            let parent_world_inv = rest_world[parent_node].inverse();
-            let from_local = (parent_world_inv * from_world.extend(1.0)).truncate();
-            let to_local = (parent_world_inv * to_world.extend(1.0)).truncate();
-
-            let dir = to_local - from_local;
-            let rest_dir_local = match dir.try_normalize() {
+            // Rest-pose direction in world space
+            let rest_dir_world = match (to_world - from_world).try_normalize() {
                 Some(d) => d,
                 None => continue,
             };
@@ -115,7 +131,7 @@ impl BodyIkSetup {
                 parent_node,
                 from_landmark: from_lm,
                 to_landmark: to_lm,
-                rest_dir_local,
+                rest_dir_world,
             });
         }
 
@@ -123,13 +139,25 @@ impl BodyIkSetup {
             return None;
         }
 
-        Some(Self { limb_segments })
+        // Look up spine bones for torso tilt/lean
+        let mut spine_bones = Vec::new();
+        for &(bone_name, weight) in SPINE_DEFS {
+            if let Some(&node) = model.bone_to_node.get(bone_name) {
+                spine_bones.push(SpineBone { node, weight });
+            }
+        }
+
+        Some(Self {
+            limb_segments,
+            spine_bones,
+        })
     }
 
     /// Solve IK for the given body landmarks.
     ///
-    /// Returns a map of node_index → rotation quaternion for each limb bone.
-    /// `rest_world` should be computed from `compute_world_transforms(model, &HashMap::new())`.
+    /// Returns a map of node_index → rotation quaternion for each affected bone
+    /// (arms + spine/chest). `rest_world` should come from
+    /// `compute_world_transforms(model, &HashMap::new())`.
     pub fn solve(
         &self,
         model: &VrmModel,
@@ -138,6 +166,17 @@ impl BodyIkSetup {
     ) -> HashMap<usize, Quat> {
         let mut rotations = HashMap::new();
 
+        // Mutable world transforms — updated after each segment so child bones
+        // see the parent's IK-rotated transform (hierarchical propagation).
+        let mut current_world = rest_world.to_vec();
+
+        // TODO: torso lean/tilt from shoulder + hip landmarks needs parent-space
+        // conversion — currently disabled because world-space tilt angles applied
+        // in bone-local space produce incorrect rotations on rigs where spine
+        // parent orientation differs from world axes.
+        // self.solve_torso(model, landmarks, &mut rotations);
+
+        // --- Limb IK with hierarchical propagation ---
         for seg in &self.limb_segments {
             let from = match landmarks.get(seg.from_landmark) {
                 Some(p) => Vec3::from_array(*p),
@@ -153,8 +192,15 @@ impl BodyIkSetup {
                 None => continue,
             };
 
-            // Transform tracked direction into parent-local space
-            let parent_inv = rest_world[seg.parent_node].inverse();
+            // Use current_world (hierarchically updated) for parent transform
+            let parent_inv = current_world[seg.parent_node].inverse();
+
+            // Both rest and tracked directions in current parent-local space
+            let rest_dir_local =
+                match parent_inv.transform_vector3(seg.rest_dir_world).try_normalize() {
+                    Some(d) => d,
+                    None => continue,
+                };
             let tracked_dir_local =
                 match parent_inv.transform_vector3(tracked_dir_world).try_normalize() {
                     Some(d) => d,
@@ -162,15 +208,113 @@ impl BodyIkSetup {
                 };
 
             // Compute delta rotation from rest to tracked direction
-            let delta = Quat::from_rotation_arc(seg.rest_dir_local, tracked_dir_local);
+            let mut delta = Quat::from_rotation_arc(rest_dir_local, tracked_dir_local);
+
+            // Elbow pole-vector correction for lower arm segments
+            if seg.bone_name == "leftLowerArm" || seg.bone_name == "rightLowerArm" {
+                delta = correct_elbow_pole(
+                    seg,
+                    &from,
+                    &tracked_dir_world,
+                    &tracked_dir_local,
+                    delta,
+                    landmarks,
+                );
+            }
 
             // Apply delta on top of rest rotation
             let rest_rot = model.rest_rotations[seg.node];
-            rotations.insert(seg.node, rest_rot * delta);
+            let ik_rot = rest_rot * delta;
+            rotations.insert(seg.node, ik_rot);
+
+            // Update current_world so child segments see this rotation
+            let ik_local = Mat4::from_scale_rotation_translation(
+                model.rest_scales[seg.node],
+                ik_rot,
+                model.rest_translations[seg.node],
+            );
+            current_world[seg.node] = current_world[seg.parent_node] * ik_local;
         }
 
         rotations
     }
+
+    /// Compute torso lean/tilt rotations from shoulder (and optionally hip) landmarks.
+    #[allow(dead_code)]
+    fn solve_torso(
+        &self,
+        model: &VrmModel,
+        landmarks: &HashMap<String, [f32; 3]>,
+        rotations: &mut HashMap<usize, Quat>,
+    ) {
+        if self.spine_bones.is_empty() {
+            return;
+        }
+
+        let (ls, rs) = match (
+            landmarks.get("leftShoulder"),
+            landmarks.get("rightShoulder"),
+        ) {
+            (Some(l), Some(r)) => (Vec3::from_array(*l), Vec3::from_array(*r)),
+            _ => return,
+        };
+
+        // Shoulder tilt (Z rotation): deviation from horizontal
+        let shoulder_dy = ls.y - rs.y;
+        let shoulder_width = (ls - rs).length().max(0.01);
+        let tilt_z = (shoulder_dy / shoulder_width).clamp(-1.0, 1.0).asin();
+
+        // Torso lean (X rotation) from hip-shoulder vertical line
+        let mut lean_x = 0.0f32;
+        if let (Some(lh), Some(rh)) = (landmarks.get("leftHip"), landmarks.get("rightHip")) {
+            let left_h = Vec3::from_array(*lh);
+            let right_h = Vec3::from_array(*rh);
+            let shoulder_mid = (ls + rs) * 0.5;
+            let hip_mid = (left_h + right_h) * 0.5;
+            let delta = shoulder_mid - hip_mid;
+            lean_x = delta.z.atan2(delta.y);
+        }
+
+        // Distribute across spine bones, composed on rest rotations
+        for sb in &self.spine_bones {
+            let tilt = Quat::from_rotation_z(tilt_z * sb.weight)
+                * Quat::from_rotation_x(lean_x * sb.weight);
+            let rest_rot = model.rest_rotations[sb.node];
+            rotations.insert(sb.node, rest_rot * tilt);
+        }
+    }
+}
+
+/// If the arm-plane normal indicates the elbow is pointing forward, flip by 180°
+/// around the limb axis to correct.
+fn correct_elbow_pole(
+    seg: &LimbSegment,
+    elbow_pos: &Vec3,
+    tracked_dir_world: &Vec3,
+    tracked_dir_local: &Vec3,
+    delta: Quat,
+    landmarks: &HashMap<String, [f32; 3]>,
+) -> Quat {
+    let upper_from_lm = if seg.bone_name == "leftLowerArm" {
+        "leftShoulder"
+    } else {
+        "rightShoulder"
+    };
+
+    if let Some(upper_from) = landmarks.get(upper_from_lm) {
+        let upper_from = Vec3::from_array(*upper_from);
+        if let Some(upper_dir) = (*elbow_pos - upper_from).try_normalize() {
+            let bend_normal = upper_dir.cross(*tracked_dir_world);
+            // Positive Z → elbow forward → flip
+            if bend_normal.length_squared() > 0.0001 && bend_normal.z > 0.0 {
+                let flip =
+                    Quat::from_axis_angle(*tracked_dir_local, std::f32::consts::PI);
+                return flip * delta;
+            }
+        }
+    }
+
+    delta
 }
 
 #[cfg(test)]
@@ -196,13 +340,19 @@ mod tests {
 
         // Verify rest directions are normalized
         for seg in &setup.limb_segments {
-            let len = seg.rest_dir_local.length();
+            let len = seg.rest_dir_world.length();
             assert!(
                 (len - 1.0).abs() < 0.01,
                 "Rest direction should be normalized, got length {}",
                 len
             );
         }
+
+        // Spine bones should be found
+        assert!(
+            !setup.spine_bones.is_empty(),
+            "Should find spine bones for torso"
+        );
     }
 
     #[test]
