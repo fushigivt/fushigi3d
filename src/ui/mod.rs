@@ -15,6 +15,7 @@ mod body_ik;
 mod renderer;
 mod smoothing;
 mod skinning;
+mod spring_bone;
 mod viewport;
 mod vrm_loader;
 

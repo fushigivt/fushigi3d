@@ -17,6 +17,7 @@ use super::body_ik::BodyIkSetup;
 use super::renderer::VrmRenderer;
 use super::skinning;
 use super::smoothing::{SmoothingMode, TrackingSmoother};
+use super::spring_bone::SpringBoneSimulator;
 use super::viewport::VrmViewportCallback;
 use super::vrm_loader::VrmModel;
 
@@ -78,6 +79,10 @@ pub struct RustuberApp {
     head_override_rot: [f32; 3],
     /// Mirror the viewport horizontally (selfie mode, default true)
     mirrored: bool,
+    /// Spring bone physics simulator (hair/cloth)
+    spring_sim: Option<SpringBoneSimulator>,
+    /// Whether spring bone physics is enabled
+    spring_bones_enabled: bool,
 }
 
 impl RustuberApp {
@@ -141,6 +146,8 @@ impl RustuberApp {
             head_override: false,
             head_override_rot: [0.0; 3],
             mirrored: true,
+            spring_sim: None,
+            spring_bones_enabled: true,
         };
 
         // Try to load VRM model and initialize renderer
@@ -234,6 +241,8 @@ impl RustuberApp {
         if self.body_ik.is_some() {
             tracing::info!("Body IK setup initialized for arm tracking");
         }
+
+        self.spring_sim = SpringBoneSimulator::new(&model);
 
         self.model = Some(model);
         self.renderer = Some(renderer);
@@ -431,6 +440,24 @@ impl RustuberApp {
 
         // Forward kinematics
         let world = skinning::compute_world_transforms(&model, &bone_rotations);
+
+        // Spring bone physics (hair/cloth secondary motion)
+        let world = if self.spring_bones_enabled {
+            if let Some(sim) = &mut self.spring_sim {
+                let spring_rots = sim.step(&model, &world, dt);
+                if !spring_rots.is_empty() {
+                    let mut final_rots = bone_rotations.clone();
+                    final_rots.extend(spring_rots);
+                    skinning::compute_world_transforms(&model, &final_rots)
+                } else {
+                    world
+                }
+            } else {
+                world
+            }
+        } else {
+            world
+        };
 
         // Skin each mesh
         let mut skinned_meshes = Vec::with_capacity(model.meshes.len());
@@ -718,6 +745,10 @@ impl eframe::App for RustuberApp {
                     self.head_override_rot = [0.0; 3];
                 }
             }
+
+            ui.separator();
+            ui.heading("Physics");
+            ui.checkbox(&mut self.spring_bones_enabled, "Spring bones");
 
             ui.separator();
             ui.heading("Body Tracking");

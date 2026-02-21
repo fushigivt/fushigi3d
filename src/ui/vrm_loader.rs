@@ -29,11 +29,54 @@ pub struct VrmModel {
     pub bone_to_node: HashMap<String, usize>,
     /// Face mesh morph target names (from mesh extras)
     pub morph_target_names: Vec<String>,
+    /// Spring bone chains (hair, cloth, etc.)
+    pub spring_chains: Vec<SpringChain>,
+    /// Spring bone colliders
+    pub spring_colliders: Vec<SpringCollider>,
+    /// Collider groups
+    pub collider_groups: Vec<ColliderGroup>,
 }
 
 pub struct SkinData {
     pub joints: Vec<usize>,
     pub inverse_bind_matrices: Vec<Mat4>,
+}
+
+/// A spring bone chain (hair, cloth, etc.) from VRMC_springBone.
+pub struct SpringChain {
+    #[allow(dead_code)]
+    pub name: String,
+    pub joints: Vec<SpringJoint>,
+    pub collider_group_indices: Vec<usize>,
+}
+
+/// A single joint in a spring bone chain.
+pub struct SpringJoint {
+    pub node: usize,
+    pub hit_radius: f32,
+    pub stiffness: f32,
+    pub gravity_power: f32,
+    pub gravity_dir: Vec3,
+    pub drag_force: f32,
+}
+
+/// A collider attached to a node.
+pub struct SpringCollider {
+    pub node: usize,
+    pub shape: ColliderShape,
+}
+
+/// Collider geometry.
+pub enum ColliderShape {
+    Sphere { offset: Vec3, radius: f32 },
+    Capsule { offset: Vec3, tail: Vec3, radius: f32 },
+}
+
+/// A named group of collider indices.
+pub struct ColliderGroup {
+    #[allow(dead_code)]
+    pub name: String,
+    pub collider_indices: Vec<usize>,
 }
 
 /// All geometry data for one mesh (potentially multiple primitives).
@@ -88,6 +131,10 @@ impl VrmModel {
 
         // Parse VRM humanoid bone map by reading raw GLB JSON
         let bone_to_node = parse_vrm_bones_from_glb(path)?;
+
+        // Parse spring bone data
+        let (spring_chains, spring_colliders, collider_groups) =
+            parse_spring_bones_from_glb(path)?;
 
         // Parse skins
         let mut skins = Vec::new();
@@ -202,6 +249,9 @@ impl VrmModel {
             mesh_skin,
             bone_to_node,
             morph_target_names,
+            spring_chains,
+            spring_colliders,
+            collider_groups,
         })
     }
 }
@@ -273,6 +323,183 @@ fn parse_vrm_bones_from_glb(path: &Path) -> Result<HashMap<String, usize>, Strin
     }
 
     Ok(map)
+}
+
+/// Parse spring bone data from the VRMC_springBone extension in a GLB file.
+fn parse_spring_bones_from_glb(
+    path: &Path,
+) -> Result<(Vec<SpringChain>, Vec<SpringCollider>, Vec<ColliderGroup>), String> {
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read GLB: {}", e))?;
+
+    if data.len() < 20 {
+        return Ok((Vec::new(), Vec::new(), Vec::new()));
+    }
+
+    let json_length = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+    if data.len() < 20 + json_length {
+        return Ok((Vec::new(), Vec::new(), Vec::new()));
+    }
+
+    let json_data = &data[20..20 + json_length];
+    let root: serde_json::Value =
+        serde_json::from_slice(json_data).map_err(|e| format!("JSON parse error: {}", e))?;
+
+    let spring_ext = match root
+        .get("extensions")
+        .and_then(|e| e.get("VRMC_springBone"))
+    {
+        Some(ext) => ext,
+        None => return Ok((Vec::new(), Vec::new(), Vec::new())),
+    };
+
+    // Parse colliders
+    let mut colliders = Vec::new();
+    if let Some(collider_arr) = spring_ext.get("colliders").and_then(|c| c.as_array()) {
+        for c in collider_arr {
+            let node = c.get("node").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+            let shape = if let Some(s) = c.get("shape") {
+                if let Some(sphere) = s.get("sphere") {
+                    let offset = parse_vec3(sphere.get("offset"));
+                    let radius = sphere
+                        .get("radius")
+                        .and_then(|r| r.as_f64())
+                        .unwrap_or(0.0) as f32;
+                    ColliderShape::Sphere { offset, radius }
+                } else if let Some(capsule) = s.get("capsule") {
+                    let offset = parse_vec3(capsule.get("offset"));
+                    let tail = parse_vec3(capsule.get("tail"));
+                    let radius = capsule
+                        .get("radius")
+                        .and_then(|r| r.as_f64())
+                        .unwrap_or(0.0) as f32;
+                    ColliderShape::Capsule {
+                        offset,
+                        tail,
+                        radius,
+                    }
+                } else {
+                    ColliderShape::Sphere {
+                        offset: Vec3::ZERO,
+                        radius: 0.0,
+                    }
+                }
+            } else {
+                ColliderShape::Sphere {
+                    offset: Vec3::ZERO,
+                    radius: 0.0,
+                }
+            };
+            colliders.push(SpringCollider { node, shape });
+        }
+    }
+
+    // Parse collider groups
+    let mut collider_groups = Vec::new();
+    if let Some(group_arr) = spring_ext
+        .get("colliderGroups")
+        .and_then(|g| g.as_array())
+    {
+        for g in group_arr {
+            let name = g
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let collider_indices: Vec<usize> = g
+                .get("colliders")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_u64().map(|n| n as usize))
+                        .collect()
+                })
+                .unwrap_or_default();
+            collider_groups.push(ColliderGroup {
+                name,
+                collider_indices,
+            });
+        }
+    }
+
+    // Parse springs (chains)
+    let mut chains = Vec::new();
+    if let Some(spring_arr) = spring_ext.get("springs").and_then(|s| s.as_array()) {
+        for s in spring_arr {
+            let name = s
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let mut joints = Vec::new();
+            if let Some(joint_arr) = s.get("joints").and_then(|j| j.as_array()) {
+                for j in joint_arr {
+                    let node = j.get("node").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+                    let hit_radius = j
+                        .get("hitRadius")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0) as f32;
+                    let stiffness = j
+                        .get("stiffness")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1.0) as f32;
+                    let gravity_power = j
+                        .get("gravityPower")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0) as f32;
+                    let gravity_dir = if let Some(gd) = j.get("gravityDir") {
+                        parse_vec3(Some(gd))
+                    } else {
+                        Vec3::new(0.0, -1.0, 0.0)
+                    };
+                    let drag_force = j
+                        .get("dragForce")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.5) as f32;
+
+                    joints.push(SpringJoint {
+                        node,
+                        hit_radius,
+                        stiffness,
+                        gravity_power,
+                        gravity_dir,
+                        drag_force,
+                    });
+                }
+            }
+
+            let collider_group_indices: Vec<usize> = s
+                .get("colliderGroups")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_u64().map(|n| n as usize))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            chains.push(SpringChain {
+                name,
+                joints,
+                collider_group_indices,
+            });
+        }
+    }
+
+    Ok((chains, colliders, collider_groups))
+}
+
+/// Parse a vec3 from a JSON object with x/y/z fields.
+fn parse_vec3(val: Option<&serde_json::Value>) -> Vec3 {
+    match val {
+        Some(v) => {
+            let x = v.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
+            let y = v.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
+            let z = v.get("z").and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
+            Vec3::new(x, y, z)
+        }
+        None => Vec3::ZERO,
+    }
 }
 
 /// Convert VRM 0.x camelCase bone names to VRM 1.0 format.
