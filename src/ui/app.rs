@@ -137,7 +137,7 @@ impl RustuberApp {
             last_frame: Instant::now(),
             selected_vad,
             camera_distance: 0.88,
-            head_only: false,
+            head_only: true,
             head_override: false,
             head_override_rot: [0.0; 3],
             mirrored: true,
