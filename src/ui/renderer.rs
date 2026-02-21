@@ -72,6 +72,7 @@ struct OffscreenState {
     offscreen_size: [u32; 2],
     projection_matrix: Mat4,
     view_matrix: Mat4,
+    mirrored: bool,
 }
 
 /// The VRM renderer. Holds all GPU resources for offscreen rendering.
@@ -390,6 +391,7 @@ impl VrmRenderer {
                 offscreen_size: [width, height],
                 projection_matrix,
                 view_matrix,
+                mirrored: true,
             }),
             blit_bind_group_layout,
             sampler,
@@ -441,6 +443,11 @@ impl VrmRenderer {
         let aspect = width as f32 / height as f32;
         let yfov = std::f32::consts::PI / 8.5;
         state.projection_matrix = Mat4::perspective_rh(yfov, aspect, 0.01, 100.0);
+    }
+
+    /// Set horizontal mirror mode (selfie-style flip).
+    pub fn set_mirrored(&self, mirrored: bool) {
+        self.offscreen.lock().unwrap().mirrored = mirrored;
     }
 
     /// Set the camera distance (Z position) for zoom control.
@@ -499,8 +506,12 @@ impl VrmRenderer {
     /// Render the scene offscreen. Call this in `prepare()`.
     pub fn render_offscreen(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let state = self.offscreen.lock().unwrap();
-        let mvp = state.projection_matrix * state.view_matrix;
-        let model_mat = Mat4::IDENTITY;
+        let model_mat = if state.mirrored {
+            Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0))
+        } else {
+            Mat4::IDENTITY
+        };
+        let mvp = state.projection_matrix * state.view_matrix * model_mat;
 
         // Update all uniform buffers
         for dc in &self.draw_calls {

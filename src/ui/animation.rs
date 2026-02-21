@@ -482,41 +482,47 @@ mod tests {
         Some(VrmModel::load(path).unwrap())
     }
 
-    // Model-agnostic axis helpers: use baseline forward/up/right to measure
-    // pitch (tilt toward up), yaw (turn toward right), roll (up tilts toward right).
-    // This works regardless of which world axes the model uses.
+    // Model-agnostic axis helpers.
+    // Due to the empirical tracker→bone axis mapping, each tracker input
+    // drives a specific geometric signal:
+    //   tracker pitch [x,0,0] → up·right changes (head nods visually)
+    //   tracker yaw   [0,y,0] → fwd·up changes   (head turns visually)
+    //   tracker roll  [0,0,z] → fwd·right changes (head tilts visually)
 
     fn head_right(model: &VrmModel) -> glam::Vec3 {
         let (fwd, up) = head_baseline(model);
         fwd.cross(up).normalize()
     }
 
-    #[test]
-    fn test_pitch_down_tilts_forward_vector_down() {
-        let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
-        let (fwd, _) = head_vectors(&model, [20.0, 0.0, 0.0]);
+    // --- Tracker axis 0 (pitch input) tests ---
 
-        // Pitch should change forward's projection onto up axis
-        let base_vert = base_fwd.dot(base_up);
-        let vert = fwd.dot(base_up);
-        let dv = (vert - base_vert).abs();
-        assert!(dv > 0.05, "20° pitch should tilt forward vertically, dv={dv:.4}");
+    #[test]
+    fn test_pitch_produces_nod() {
+        let model = match load_test_model() { Some(m) => m, None => return };
+        let (_, base_up) = head_baseline(&model);
+        let right = head_right(&model);
+        let (_, up) = head_vectors(&model, [20.0, 0.0, 0.0]);
+
+        let base_val = base_up.dot(right);
+        let val = up.dot(right);
+        let dv = (val - base_val).abs();
+        assert!(dv > 0.05, "20° pitch should change up·right, dv={dv:.4}");
     }
 
     #[test]
-    fn test_pitch_up_opposite_of_pitch_down() {
+    fn test_pitch_opposite_signs() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
-        let (fwd_down, _) = head_vectors(&model, [20.0, 0.0, 0.0]);
-        let (fwd_up, _) = head_vectors(&model, [-20.0, 0.0, 0.0]);
+        let (_, base_up) = head_baseline(&model);
+        let right = head_right(&model);
+        let (_, up_pos) = head_vectors(&model, [20.0, 0.0, 0.0]);
+        let (_, up_neg) = head_vectors(&model, [-20.0, 0.0, 0.0]);
 
-        let base_vert = base_fwd.dot(base_up);
-        let d_down = fwd_down.dot(base_up) - base_vert;
-        let d_up = fwd_up.dot(base_up) - base_vert;
+        let base_val = base_up.dot(right);
+        let d_pos = up_pos.dot(right) - base_val;
+        let d_neg = up_neg.dot(right) - base_val;
         assert!(
-            d_down * d_up < 0.0,
-            "Pitch up/down should tilt in opposite directions: down={d_down:.4}, up={d_up:.4}"
+            d_pos * d_neg < 0.0,
+            "Pitch ±20 should produce opposite shifts: +={d_pos:.4}, -={d_neg:.4}"
         );
     }
 
@@ -527,128 +533,98 @@ mod tests {
         let right = head_right(&model);
         let (fwd, _) = head_vectors(&model, [25.0, 0.0, 0.0]);
 
-        // Pure pitch should barely change forward's projection onto right axis
-        let base_horiz = base_fwd.dot(right);
-        let horiz = fwd.dot(right);
-        let dh = (horiz - base_horiz).abs();
-        assert!(
-            dh < 0.05,
-            "Pure pitch should not cause yaw, right-projection shift={dh:.4}"
-        );
+        let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+        assert!(dh < 0.05, "Pure pitch should not turn horizontally, dh={dh:.4}");
     }
 
     #[test]
     fn test_pitch_does_not_cause_roll() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
-        let right = head_right(&model);
-        let (_, up) = head_vectors(&model, [25.0, 0.0, 0.0]);
+        let (base_fwd, base_up) = head_baseline(&model);
+        let (fwd, _) = head_vectors(&model, [25.0, 0.0, 0.0]);
 
-        // Roll = up vector tilting toward right axis
-        let base_roll = base_up.dot(right);
-        let roll_shift = (up.dot(right) - base_roll).abs();
-        assert!(
-            roll_shift < 0.05,
-            "Pure pitch should not cause roll, up·right shift={roll_shift:.4}"
-        );
+        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+        assert!(dv < 0.05, "Pure pitch should not tilt forward vertically, dv={dv:.4}");
     }
 
+    // --- Tracker axis 1 (yaw input) tests ---
+
     #[test]
-    fn test_yaw_right_turns_forward_vector_right() {
+    fn test_yaw_tilts_forward_vertically() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, _) = head_baseline(&model);
-        let right = head_right(&model);
+        let (base_fwd, base_up) = head_baseline(&model);
         let (fwd, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
 
-        // Yaw should change forward's projection onto right axis
-        let base_horiz = base_fwd.dot(right);
-        let horiz = fwd.dot(right);
-        let dh = (horiz - base_horiz).abs();
-        assert!(
-            dh > 0.05,
-            "25° yaw should turn forward horizontally, right-projection shift={dh:.4}"
-        );
+        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+        assert!(dv > 0.05, "25° yaw should change fwd·up, dv={dv:.4}");
     }
 
     #[test]
-    fn test_yaw_left_opposite_of_yaw_right() {
+    fn test_yaw_opposite_signs() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, _) = head_baseline(&model);
-        let right = head_right(&model);
+        let (base_fwd, base_up) = head_baseline(&model);
         let (fwd_r, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
         let (fwd_l, _) = head_vectors(&model, [0.0, -25.0, 0.0]);
 
-        let base_h = base_fwd.dot(right);
-        let d_r = fwd_r.dot(right) - base_h;
-        let d_l = fwd_l.dot(right) - base_h;
+        let base_v = base_fwd.dot(base_up);
+        let d_r = fwd_r.dot(base_up) - base_v;
+        let d_l = fwd_l.dot(base_up) - base_v;
         assert!(
             d_r * d_l < 0.0,
-            "Yaw left/right should turn in opposite directions: R={d_r:.4}, L={d_l:.4}"
+            "Yaw ±25 should produce opposite shifts: +={d_r:.4}, -={d_l:.4}"
         );
     }
 
     #[test]
     fn test_yaw_does_not_cause_pitch() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
-        let (fwd, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
+        let (_, base_up) = head_baseline(&model);
+        let right = head_right(&model);
+        let (_, up) = head_vectors(&model, [0.0, 25.0, 0.0]);
 
-        // Pure yaw should barely change forward's vertical projection
-        let base_vert = base_fwd.dot(base_up);
-        let vert = fwd.dot(base_up);
-        let dv = (vert - base_vert).abs();
-        assert!(
-            dv < 0.05,
-            "Pure yaw should not cause pitch, up-projection shift={dv:.4}"
-        );
+        let dr = (up.dot(right) - base_up.dot(right)).abs();
+        assert!(dr < 0.05, "Pure yaw should not cause pitch, up·right shift={dr:.4}");
     }
 
     #[test]
     fn test_yaw_does_not_cause_roll() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
+        let (base_fwd, _) = head_baseline(&model);
         let right = head_right(&model);
-        let (_, up) = head_vectors(&model, [0.0, 25.0, 0.0]);
+        let (fwd, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
 
-        let base_roll = base_up.dot(right);
-        let roll_shift = (up.dot(right) - base_roll).abs();
-        assert!(
-            roll_shift < 0.05,
-            "Pure yaw should not cause roll, up·right shift={roll_shift:.4}"
-        );
+        let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+        assert!(dh < 0.05, "Pure yaw should not turn horizontally, dh={dh:.4}");
     }
 
-    #[test]
-    fn test_roll_tilts_up_vector_sideways() {
-        let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
-        let right = head_right(&model);
-        let (_, up) = head_vectors(&model, [0.0, 0.0, 15.0]);
+    // --- Tracker axis 2 (roll input) tests ---
 
-        // Roll = up vector tilting toward right axis
-        let base_roll = base_up.dot(right);
-        let roll_shift = (up.dot(right) - base_roll).abs();
-        assert!(roll_shift > 0.03, "15° roll should tilt up sideways, up·right shift={roll_shift:.4}");
+    #[test]
+    fn test_roll_turns_forward_horizontally() {
+        let model = match load_test_model() { Some(m) => m, None => return };
+        let (base_fwd, _) = head_baseline(&model);
+        let right = head_right(&model);
+        let (fwd, _) = head_vectors(&model, [0.0, 0.0, 15.0]);
+
+        let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+        assert!(dh > 0.03, "15° roll should change fwd·right, dh={dh:.4}");
     }
 
     #[test]
     fn test_roll_does_not_cause_pitch() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
-        let (fwd, _) = head_vectors(&model, [0.0, 0.0, 15.0]);
+        let (_, base_up) = head_baseline(&model);
+        let right = head_right(&model);
+        let (_, up) = head_vectors(&model, [0.0, 0.0, 15.0]);
 
-        let base_vert = base_fwd.dot(base_up);
-        let vert = fwd.dot(base_up);
-        let dv = (vert - base_vert).abs();
-        assert!(
-            dv < 0.05,
-            "Pure roll should not cause pitch, up-projection shift={dv:.4}"
-        );
+        let dr = (up.dot(right) - base_up.dot(right)).abs();
+        assert!(dr < 0.05, "Pure roll should not cause pitch, up·right shift={dr:.4}");
     }
+
+    // --- Round-trip and coupling tests ---
 
     #[test]
     fn test_euler_round_trip_zyx() {
-        // Verify that ZYX Euler angles round-trip through quat → decompose.
         let pitch_deg = 15.0f32;
         let yaw_deg = -10.0f32;
         let roll_deg = 5.0f32;
@@ -657,10 +633,7 @@ mod tests {
         let ry = yaw_deg.to_radians();
         let rz = roll_deg.to_radians();
 
-        // Reconstruct with ZYX (matches Python decomposition R = Rz*Ry*Rx)
         let q = Quat::from_euler(glam::EulerRot::ZYX, rz, ry, rx);
-
-        // Decompose back via glam's built-in
         let (ez, ey, ex) = q.to_euler(glam::EulerRot::ZYX);
 
         assert!((ex - rx).abs() < 0.001, "Pitch round-trip: {ex:.4} vs {rx:.4}");
@@ -669,22 +642,33 @@ mod tests {
     }
 
     #[test]
-    fn test_cross_coupling_pitch_vs_roll() {
-        // The original bug: pitch changes caused roll changes.
-        // Sweep pitch from -30 to +30 with roll=0 and verify
-        // the up vector's right-projection (roll indicator) stays stable.
+    fn test_cross_coupling_sweep() {
+        // Sweep each axis independently and verify the other two stay stable.
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
+        let (base_fwd, base_up) = head_baseline(&model);
         let right = head_right(&model);
-        let base_roll = base_up.dot(right);
 
-        for pitch in [-30.0, -15.0, 15.0, 30.0f32] {
-            let (_, up) = head_vectors(&model, [pitch, 0.0, 0.0]);
-            let roll_shift = (up.dot(right) - base_roll).abs();
-            assert!(
-                roll_shift < 0.08,
-                "Pitch {pitch}° should not cause roll, up·right shift={roll_shift:.4}"
-            );
+        for angle in [-30.0, -15.0, 15.0, 30.0f32] {
+            // Pitch sweep: fwd·up and fwd·right should stay stable
+            let (fwd, _) = head_vectors(&model, [angle, 0.0, 0.0]);
+            let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+            let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+            assert!(dv < 0.08, "Pitch {angle}° cross→yaw: fwd·up shift={dv:.4}");
+            assert!(dh < 0.08, "Pitch {angle}° cross→roll: fwd·right shift={dh:.4}");
+
+            // Yaw sweep: up·right and fwd·right should stay stable
+            let (fwd, up) = head_vectors(&model, [0.0, angle, 0.0]);
+            let dr = (up.dot(right) - base_up.dot(right)).abs();
+            let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+            assert!(dr < 0.08, "Yaw {angle}° cross→pitch: up·right shift={dr:.4}");
+            assert!(dh < 0.08, "Yaw {angle}° cross→roll: fwd·right shift={dh:.4}");
+
+            // Roll sweep: up·right and fwd·up should stay stable
+            let (fwd, up) = head_vectors(&model, [0.0, 0.0, angle]);
+            let dr = (up.dot(right) - base_up.dot(right)).abs();
+            let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+            assert!(dr < 0.08, "Roll {angle}° cross→pitch: up·right shift={dr:.4}");
+            assert!(dv < 0.08, "Roll {angle}° cross→yaw: fwd·up shift={dv:.4}");
         }
     }
 

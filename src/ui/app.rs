@@ -76,6 +76,8 @@ pub struct RustuberApp {
     head_override: bool,
     /// Manual [pitch, yaw, roll] in degrees
     head_override_rot: [f32; 3],
+    /// Mirror the viewport horizontally (selfie mode, default true)
+    mirrored: bool,
 }
 
 impl RustuberApp {
@@ -138,6 +140,7 @@ impl RustuberApp {
             head_only: false,
             head_override: false,
             head_override_rot: [0.0; 3],
+            mirrored: true,
         };
 
         // Try to load VRM model and initialize renderer
@@ -361,6 +364,7 @@ impl RustuberApp {
         };
 
         renderer.set_camera_distance(self.camera_distance);
+        renderer.set_mirrored(self.mirrored);
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -492,6 +496,8 @@ impl eframe::App for RustuberApp {
                     if ui.button("+").clicked() {
                         self.camera_distance = (self.camera_distance - 0.05).max(0.3);
                     }
+                    ui.separator();
+                    ui.checkbox(&mut self.mirrored, "Mirror");
                 });
             }
 
