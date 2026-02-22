@@ -83,6 +83,8 @@ pub struct RustuberApp {
     spring_sim: Option<SpringBoneSimulator>,
     /// Whether spring bone physics is enabled
     spring_bones_enabled: bool,
+    /// Gravity multiplier for spring bones (1.0 = authored values)
+    spring_gravity: f32,
 }
 
 impl RustuberApp {
@@ -148,6 +150,7 @@ impl RustuberApp {
             mirrored: true,
             spring_sim: None,
             spring_bones_enabled: true,
+            spring_gravity: 1.0,
         };
 
         // Try to load VRM model and initialize renderer
@@ -444,7 +447,7 @@ impl RustuberApp {
         // Spring bone physics (hair/cloth secondary motion)
         let world = if self.spring_bones_enabled {
             if let Some(sim) = &mut self.spring_sim {
-                let spring_rots = sim.step(&model, &world, dt);
+                let spring_rots = sim.step(&model, &world, dt, self.spring_gravity);
                 if !spring_rots.is_empty() {
                     let mut final_rots = bone_rotations.clone();
                     final_rots.extend(spring_rots);
@@ -749,6 +752,11 @@ impl eframe::App for RustuberApp {
             ui.separator();
             ui.heading("Physics");
             ui.checkbox(&mut self.spring_bones_enabled, "Spring bones");
+            ui.add_enabled(
+                self.spring_bones_enabled,
+                egui::Slider::new(&mut self.spring_gravity, 0.0..=5.0)
+                    .text("Gravity"),
+            );
 
             ui.separator();
             ui.heading("Body Tracking");

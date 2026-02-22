@@ -489,9 +489,17 @@ fn parse_spring_bones_from_glb(
     Ok((chains, colliders, collider_groups))
 }
 
-/// Parse a vec3 from a JSON object with x/y/z fields.
+/// Parse a vec3 from JSON — handles both array `[x,y,z]` (VRMC 1.0) and
+/// object `{"x":..,"y":..,"z":..}` (VRM 0.x) formats.
 fn parse_vec3(val: Option<&serde_json::Value>) -> Vec3 {
     match val {
+        Some(v) if v.is_array() => {
+            let arr = v.as_array().unwrap();
+            let x = arr.first().and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
+            let y = arr.get(1).and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
+            let z = arr.get(2).and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
+            Vec3::new(x, y, z)
+        }
         Some(v) => {
             let x = v.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;
             let y = v.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0) as f32;

@@ -197,12 +197,14 @@ impl SpringBoneSimulator {
     /// Step the simulation forward by `dt` seconds.
     ///
     /// `world_transforms` are the current frame's world transforms (after animation/IK).
+    /// `gravity_scale` multiplies the per-joint gravity_power (1.0 = authored values).
     /// Returns a map of node_index → rotation quaternion for spring-affected bones.
     pub fn step(
         &mut self,
         model: &VrmModel,
         world_transforms: &[Mat4],
         dt: f32,
+        gravity_scale: f32,
     ) -> HashMap<usize, Quat> {
         let dt = dt.min(0.05); // Clamp to avoid explosion on frame spikes
         if dt < 1e-6 {
@@ -228,6 +230,21 @@ impl SpringBoneSimulator {
             let mut current_world = world_transforms.to_vec();
 
             for joint in &mut chain.joints {
+                // Propagate parent spring rotation to this joint's position.
+                // Without this, child joints don't see their parent's spring motion
+                // and compute tails/collisions against stale positions.
+                if let Some(parent) = model.parents[joint.node] {
+                    let rest_local = Mat4::from_scale_rotation_translation(
+                        model.rest_scales[joint.node],
+                        rotations
+                            .get(&joint.node)
+                            .copied()
+                            .unwrap_or(model.rest_rotations[joint.node]),
+                        model.rest_translations[joint.node],
+                    );
+                    current_world[joint.node] = current_world[parent] * rest_local;
+                }
+
                 let world_pos = current_world[joint.node].col(3).truncate();
                 let parent_rot = if let Some(parent) = model.parents[joint.node] {
                     quat_from_mat4(&current_world[parent])
@@ -245,26 +262,29 @@ impl SpringBoneSimulator {
                 let rest_tail_dir = parent_rot * rest_local_rot * joint.bone_axis;
                 let stiffness_force = dt * rest_tail_dir * joint.stiffness;
 
-                // 3. Gravity
-                let gravity = dt * joint.gravity_dir * joint.gravity_power;
+                // 3. Gravity (scaled by user multiplier)
+                let gravity = dt * joint.gravity_dir * joint.gravity_power * gravity_scale;
 
                 // 4. Next tail position
                 let mut next_tail = joint.current_tail + inertia + stiffness_force + gravity;
 
                 // 5. Length constraint
-                let to_tail = next_tail - world_pos;
-                let dist = to_tail.length();
-                if dist > 1e-6 {
-                    next_tail = world_pos + (to_tail / dist) * joint.bone_length;
-                } else {
-                    // Fallback: place tail at rest direction
-                    next_tail = world_pos + rest_tail_dir * joint.bone_length;
-                }
+                next_tail = apply_length_constraint(next_tail, world_pos, joint.bone_length, rest_tail_dir);
 
-                // 6. Collision
-                for collider in &chain_colliders {
-                    next_tail =
-                        resolve_collision(next_tail, joint.hit_radius, collider, world_pos, joint.bone_length);
+                // 6. Collision (multiple passes to resolve deep interpenetration)
+                for _pass in 0..3 {
+                    let mut moved = false;
+                    for collider in &chain_colliders {
+                        let resolved =
+                            resolve_collision(next_tail, joint.hit_radius, collider, world_pos, joint.bone_length);
+                        if resolved != next_tail {
+                            next_tail = resolved;
+                            moved = true;
+                        }
+                    }
+                    if !moved {
+                        break;
+                    }
                 }
 
                 // Update state
@@ -350,6 +370,17 @@ impl SpringBoneSimulator {
                 joint.current_tail = tail;
             }
         }
+    }
+}
+
+/// Constrain `tail` to be exactly `bone_length` from `world_pos`.
+fn apply_length_constraint(tail: Vec3, world_pos: Vec3, bone_length: f32, fallback_dir: Vec3) -> Vec3 {
+    let to_tail = tail - world_pos;
+    let dist = to_tail.length();
+    if dist > 1e-6 {
+        world_pos + (to_tail / dist) * bone_length
+    } else {
+        world_pos + fallback_dir * bone_length
     }
 }
 
@@ -478,7 +509,7 @@ mod tests {
         };
 
         let world = skinning::compute_world_transforms(&model, &HashMap::new());
-        let rotations = sim.step(&model, &world, 1.0 / 60.0);
+        let rotations = sim.step(&model, &world, 1.0 / 60.0, 1.0);
 
         // With rest pose and gravity, should produce some rotations
         // (joints with gravity_power > 0 will move)
@@ -501,7 +532,7 @@ mod tests {
         // Step a few times
         let world = skinning::compute_world_transforms(&model, &HashMap::new());
         for _ in 0..10 {
-            sim.step(&model, &world, 1.0 / 60.0);
+            sim.step(&model, &world, 1.0 / 60.0, 1.0);
         }
 
         // Reset should not panic
