@@ -89,6 +89,8 @@ pub struct RustuberApp {
     spring_collider_scale: f32,
     /// Whether to render with textures (true) or white/lit shading (false)
     textured: bool,
+    /// Whether the controls side panel is visible
+    show_controls: bool,
 }
 
 impl RustuberApp {
@@ -157,6 +159,7 @@ impl RustuberApp {
             spring_gravity: 1.0,
             spring_collider_scale: 1.3,
             textured: true,
+            show_controls: true,
         };
 
         // Try to load VRM model and initialize renderer
@@ -504,14 +507,22 @@ impl eframe::App for RustuberApp {
             }
         }
 
+        // Toggle controls panel with Tab
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+            self.show_controls = !self.show_controls;
+        }
+
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.label("rustuber");
                 ui.separator();
-                ui.label("VTuber engine");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.small("Tab: toggle options");
+                });
             });
         });
 
+        if self.show_controls {
         egui::SidePanel::left("controls").show(ctx, |ui| {
             ui.heading("Controls");
             ui.separator();
@@ -800,6 +811,7 @@ impl eframe::App for RustuberApp {
                 ui.colored_label(theme.red, err);
             }
         });
+        } // end show_controls
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.view_mode {
