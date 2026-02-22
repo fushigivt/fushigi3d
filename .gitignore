@@ -1,0 +1,17 @@
+# Build
+/target/
+
+# Runtime assets (models, sprites, ML weights)
+/assets/
+*.task
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
