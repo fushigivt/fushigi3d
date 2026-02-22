@@ -358,7 +358,7 @@ pub struct VrmConfig {
 impl Default for VrmConfig {
     fn default() -> Self {
         Self {
-            model_path: "assets/default/model.glb".to_string(),
+            model_path: "assets/default/models/long-hair.vrm".to_string(),
         }
     }
 }

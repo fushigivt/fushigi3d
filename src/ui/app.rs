@@ -1,10 +1,12 @@
 //! Main egui application with VRM 3D viewport and 2D PNGTuber mode.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;
+use eframe::wgpu;
 
 use crate::avatar::assets::AssetManager;
 use crate::avatar::AvatarState;
@@ -91,6 +93,16 @@ pub struct Fushigi3dApp {
     textured: bool,
     /// Whether the controls side panel is visible
     show_controls: bool,
+    /// Available VRM/GLB models: (display_name, path)
+    available_models: Vec<(String, String)>,
+    /// Currently selected model display name
+    selected_model: String,
+    /// Stored wgpu device for model reloading
+    wgpu_device: Option<Arc<wgpu::Device>>,
+    /// Stored wgpu queue for model reloading
+    wgpu_queue: Option<Arc<wgpu::Queue>>,
+    /// Stored wgpu texture format for model reloading
+    wgpu_format: wgpu::TextureFormat,
 }
 
 impl Fushigi3dApp {
@@ -129,6 +141,14 @@ impl Fushigi3dApp {
 
         let selected_vad = config.vad.provider;
 
+        let available_models = Self::scan_models();
+
+        // Derive initial selected model name from config path
+        let selected_model = Path::new(&config.avatar.vrm.model_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
         let mut app = Self {
             state,
             state_rx,
@@ -160,6 +180,11 @@ impl Fushigi3dApp {
             spring_collider_scale: 1.3,
             textured: true,
             show_controls: true,
+            available_models,
+            selected_model,
+            wgpu_device: None,
+            wgpu_queue: None,
+            wgpu_format: wgpu::TextureFormat::Bgra8UnormSrgb,
         };
 
         // Try to load VRM model and initialize renderer
@@ -182,76 +207,92 @@ impl Fushigi3dApp {
             }
         };
 
-        // Load model
+        // Store wgpu state for later model reloads
+        self.wgpu_device = Some(Arc::new(render_state.device.clone()));
+        self.wgpu_queue = Some(Arc::new(render_state.queue.clone()));
+        self.wgpu_format = render_state.target_format;
+
+        // Load model from config path
         let config = {
-            // We can't await here (sync context), so use try_lock or blocking
-            // Since this is init, the config won't be contended
             let rt = tokio::runtime::Handle::try_current();
             match rt {
                 Ok(handle) => {
-                    // We're in a tokio context, use block_in_place
                     tokio::task::block_in_place(|| {
                         handle.block_on(self.state.config.read()).clone()
                     })
                 }
                 Err(_) => {
-                    // Not in tokio context; try to read config path from default
                     crate::config::Config::default()
                 }
             }
         };
 
-        let model_path = &config.avatar.vrm.model_path;
+        let model_path = config.avatar.vrm.model_path.clone();
+        self.load_model_from_path(&model_path);
+    }
 
-        let model = match VrmModel::load(model_path) {
-            Ok(m) => {
-                tracing::info!(
-                    "VRM model loaded: {} meshes, {} morph targets, {} bones",
-                    m.meshes.len(),
-                    m.morph_target_names.len(),
-                    m.bone_to_node.len()
-                );
-                Arc::new(m)
+    /// Load a VRM/GLB model from the given path, replacing the current model.
+    /// On error, logs and sets `load_error` but keeps the previous model intact.
+    fn load_model_from_path(&mut self, path: &str) {
+        let device = match &self.wgpu_device {
+            Some(d) => d.clone(),
+            None => {
+                self.load_error = Some("wgpu device not available".to_string());
+                return;
             }
-            Err(e) => {
-                self.load_error = Some(format!("Failed to load VRM model: {}", e));
-                tracing::error!("{}", self.load_error.as_ref().unwrap());
+        };
+        let queue = match &self.wgpu_queue {
+            Some(q) => q.clone(),
+            None => {
+                self.load_error = Some("wgpu queue not available".to_string());
                 return;
             }
         };
 
-        // Create blendshape mapper
+        let model = match VrmModel::load(path) {
+            Ok(m) => {
+                tracing::info!(
+                    "VRM model loaded: {} meshes, {} morph targets, {} bones ({})",
+                    m.meshes.len(),
+                    m.morph_target_names.len(),
+                    m.bone_to_node.len(),
+                    path,
+                );
+                Arc::new(m)
+            }
+            Err(e) => {
+                let msg = format!("Failed to load VRM model '{}': {}", path, e);
+                tracing::error!("{}", msg);
+                self.load_error = Some(msg);
+                return;
+            }
+        };
+
         let mapper = BlendshapeMapper::new(
             &model.morph_target_names,
             &model.expression_binds,
             &model.binary_expressions,
         );
 
-        // Create renderer
-        let device = &render_state.device;
-        let queue = &render_state.queue;
-        let target_format = render_state.target_format;
-
         let renderer = Arc::new(VrmRenderer::new(
-            device,
-            queue,
-            target_format,
+            &device,
+            &queue,
+            self.wgpu_format,
             &model,
             800,
             600,
         ));
 
-        // Do initial skinning with rest pose
+        // Initial skinning with rest pose
         let rotations = animation::idle_pose(&model);
         let world = skinning::compute_world_transforms(&model, &rotations);
-
         let mut skinned_meshes = Vec::new();
         for (mesh_idx, _mesh) in model.meshes.iter().enumerate() {
             let base = skinning::base_positions(&model, mesh_idx);
             let skinned = skinning::skin_vertices(&model, mesh_idx, &base, &world);
             skinned_meshes.push(skinned);
         }
-        renderer.update_vertices(queue, &model, &skinned_meshes);
+        renderer.update_vertices(&queue, &model, &skinned_meshes);
 
         self.body_ik = BodyIkSetup::from_model(&model);
         if self.body_ik.is_some() {
@@ -263,6 +304,35 @@ impl Fushigi3dApp {
         self.model = Some(model);
         self.renderer = Some(renderer);
         self.mapper = Some(mapper);
+        self.load_error = None;
+    }
+
+    /// Scan for available VRM/GLB models in the models directory and legacy path.
+    fn scan_models() -> Vec<(String, String)> {
+        let mut models = Vec::new();
+        let models_dir = Path::new("assets/default/models");
+        if let Ok(entries) = std::fs::read_dir(models_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    let ext = ext.to_string_lossy().to_lowercase();
+                    if ext == "vrm" || ext == "glb" {
+                        let name = path
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        models.push((name, path.to_string_lossy().to_string()));
+                    }
+                }
+            }
+        }
+        // Legacy single-model path
+        let legacy = Path::new("assets/default/model.glb");
+        if legacy.exists() {
+            models.push(("model".to_string(), legacy.to_string_lossy().to_string()));
+        }
+        models.sort_by(|a, b| a.0.cmp(&b.0));
+        models
     }
 
     /// Launch the native UI window. Blocks until the window is closed.
@@ -549,6 +619,28 @@ impl eframe::App for Fushigi3dApp {
                 ui.selectable_value(&mut self.view_mode, ViewMode::Vrm3D, "3D (VRM)");
                 ui.selectable_value(&mut self.view_mode, ViewMode::PngTuber2D, "2D (PNG)");
             });
+
+            // Model picker
+            if !self.available_models.is_empty() {
+                ui.label("Model");
+                let prev_model = self.selected_model.clone();
+                egui::ComboBox::from_id_salt("model_picker")
+                    .selected_text(&self.selected_model)
+                    .show_ui(ui, |ui| {
+                        for (name, _) in &self.available_models {
+                            ui.selectable_value(&mut self.selected_model, name.clone(), name);
+                        }
+                    });
+                if self.selected_model != prev_model {
+                    if let Some((_, path)) = self.available_models.iter()
+                        .find(|(n, _)| n == &self.selected_model)
+                    {
+                        let path = path.clone();
+                        self.load_model_from_path(&path);
+                    }
+                }
+                ui.separator();
+            }
 
             if self.view_mode == ViewMode::Vrm3D {
                 ui.horizontal(|ui| {
