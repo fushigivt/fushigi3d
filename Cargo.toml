@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Headless VTuber/PNGTuber service for Linux"
 authors = ["Rustuber Contributors"]
-license = "AGPL-3.0-only"
-repository = ""
+license = "GPL-3.0-only"
+repository = "https://github.com/fushigivt/fushigi3d"
 
 [dependencies]
-signal-smooth = { path = "../signal-smooth" }
+signal-smooth = { path = "crates/signal-smooth" }
 
 # Audio & VAD
 cpal = "0.15"

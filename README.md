@@ -15,14 +15,17 @@ A headless VTuber/PNGTuber service for Linux written in Rust.
 
 ```bash
 # Clone the repository
-git clone https://github.com/example/rustuber.git
-cd rustuber
+git clone https://github.com/fushigivt/fushigi3d.git
+cd fushigi3d
 
-# Build in release mode
+# Download a free VRM model and placeholder sprites
+./scripts/setup.sh
+
+# Build and run with 3D viewport
+cargo run --release --features native-ui
+
+# Or build headless (browser source / OBS only)
 cargo build --release
-
-# Run with default config
-cargo run --release
 ```
 
 ## Usage
@@ -148,4 +151,4 @@ cargo clippy
 
 ## License
 
-MIT License
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
