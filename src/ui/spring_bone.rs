@@ -197,22 +197,25 @@ impl SpringBoneSimulator {
     /// Step the simulation forward by `dt` seconds.
     ///
     /// `world_transforms` are the current frame's world transforms (after animation/IK).
-    /// `gravity_scale` multiplies the per-joint gravity_power (1.0 = authored values).
+    /// `external_gravity` adds uniform downward gravity to ALL joints (on top of authored
+    /// per-joint gravity). 0.0 = authored values only, 0.5 = moderate pull, 1.0+ = strong.
+    /// `collider_scale` multiplies all collider radii (1.0 = authored, 1.5 = 50% larger).
     /// Returns a map of node_index → rotation quaternion for spring-affected bones.
     pub fn step(
         &mut self,
         model: &VrmModel,
         world_transforms: &[Mat4],
         dt: f32,
-        gravity_scale: f32,
+        external_gravity: f32,
+        collider_scale: f32,
     ) -> HashMap<usize, Quat> {
         let dt = dt.min(0.05); // Clamp to avoid explosion on frame spikes
         if dt < 1e-6 {
             return HashMap::new();
         }
 
-        // Resolve colliders to world space
-        let world_colliders = self.resolve_colliders(world_transforms);
+        // Resolve colliders to world space (with radius scaling)
+        let world_colliders = self.resolve_colliders(world_transforms, collider_scale);
 
         let mut rotations = HashMap::new();
 
@@ -262,8 +265,10 @@ impl SpringBoneSimulator {
                 let rest_tail_dir = parent_rot * rest_local_rot * joint.bone_axis;
                 let stiffness_force = dt * rest_tail_dir * joint.stiffness;
 
-                // 3. Gravity (scaled by user multiplier)
-                let gravity = dt * joint.gravity_dir * joint.gravity_power * gravity_scale;
+                // 3. Gravity: authored per-joint + uniform external pull
+                let authored = dt * joint.gravity_dir * joint.gravity_power;
+                let external = dt * Vec3::new(0.0, -1.0, 0.0) * external_gravity;
+                let gravity = authored + external;
 
                 // 4. Next tail position
                 let mut next_tail = joint.current_tail + inertia + stiffness_force + gravity;
@@ -322,7 +327,8 @@ impl SpringBoneSimulator {
     }
 
     /// Resolve all colliders to world space using current world transforms.
-    fn resolve_colliders(&self, world_transforms: &[Mat4]) -> Vec<WorldCollider> {
+    /// `radius_scale` multiplies all collider radii.
+    fn resolve_colliders(&self, world_transforms: &[Mat4], radius_scale: f32) -> Vec<WorldCollider> {
         self.collider_nodes
             .iter()
             .map(|(node, shape)| {
@@ -335,7 +341,7 @@ impl SpringBoneSimulator {
                         let center = world_pos + world_rot * *offset;
                         WorldColliderShape::Sphere {
                             center,
-                            radius: *radius,
+                            radius: *radius * radius_scale,
                         }
                     }
                     ColliderShapeCopy::Capsule {
@@ -348,7 +354,7 @@ impl SpringBoneSimulator {
                         WorldColliderShape::Capsule {
                             start,
                             end,
-                            radius: *radius,
+                            radius: *radius * radius_scale,
                         }
                     }
                 };
@@ -509,7 +515,7 @@ mod tests {
         };
 
         let world = skinning::compute_world_transforms(&model, &HashMap::new());
-        let rotations = sim.step(&model, &world, 1.0 / 60.0, 1.0);
+        let rotations = sim.step(&model, &world, 1.0 / 60.0, 0.0, 1.0);
 
         // With rest pose and gravity, should produce some rotations
         // (joints with gravity_power > 0 will move)
@@ -532,7 +538,7 @@ mod tests {
         // Step a few times
         let world = skinning::compute_world_transforms(&model, &HashMap::new());
         for _ in 0..10 {
-            sim.step(&model, &world, 1.0 / 60.0, 1.0);
+            sim.step(&model, &world, 1.0 / 60.0, 0.0, 1.0);
         }
 
         // Reset should not panic

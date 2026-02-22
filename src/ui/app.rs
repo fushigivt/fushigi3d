@@ -83,8 +83,10 @@ pub struct RustuberApp {
     spring_sim: Option<SpringBoneSimulator>,
     /// Whether spring bone physics is enabled
     spring_bones_enabled: bool,
-    /// Gravity multiplier for spring bones (1.0 = authored values)
+    /// External gravity strength for spring bones (additive, 0.0 = authored only)
     spring_gravity: f32,
+    /// Collider radius multiplier (1.0 = authored, higher = larger collision volumes)
+    spring_collider_scale: f32,
 }
 
 impl RustuberApp {
@@ -151,6 +153,7 @@ impl RustuberApp {
             spring_sim: None,
             spring_bones_enabled: true,
             spring_gravity: 1.0,
+            spring_collider_scale: 1.3,
         };
 
         // Try to load VRM model and initialize renderer
@@ -447,7 +450,7 @@ impl RustuberApp {
         // Spring bone physics (hair/cloth secondary motion)
         let world = if self.spring_bones_enabled {
             if let Some(sim) = &mut self.spring_sim {
-                let spring_rots = sim.step(&model, &world, dt, self.spring_gravity);
+                let spring_rots = sim.step(&model, &world, dt, self.spring_gravity, self.spring_collider_scale);
                 if !spring_rots.is_empty() {
                     let mut final_rots = bone_rotations.clone();
                     final_rots.extend(spring_rots);
@@ -754,8 +757,13 @@ impl eframe::App for RustuberApp {
             ui.checkbox(&mut self.spring_bones_enabled, "Spring bones");
             ui.add_enabled(
                 self.spring_bones_enabled,
-                egui::Slider::new(&mut self.spring_gravity, 0.0..=5.0)
+                egui::Slider::new(&mut self.spring_gravity, 0.0..=2.0)
                     .text("Gravity"),
+            );
+            ui.add_enabled(
+                self.spring_bones_enabled,
+                egui::Slider::new(&mut self.spring_collider_scale, 0.5..=3.0)
+                    .text("Collider scale"),
             );
 
             ui.separator();
