@@ -1,14 +1,13 @@
 # Fushigi3D
 
-A headless VTuber/PNGTuber service for Linux written in Rust.
+VTuber/PNGTuber UI or headless service for Linux.
 
 ## Features
 
-- **Standalone Operation**: Works as a complete PNGTuber application without external dependencies
+- **Few Dependencies**: Standalone PNGTuber, MediaPipe for 3d model.
 - **Voice Activity Detection**: Multiple VAD backends (energy-based, Silero, WebRTC)
 - **OBS Integration**: WebSocket-based scene/source switching
 - **Browser Source**: Self-contained avatar page for OBS browser sources
-- **VMC Protocol**: Receive face tracking data from OpenSeeFace/VSeeFace
 - **Web Dashboard**: Real-time configuration and preview
 
 ## Installation
@@ -18,7 +17,7 @@ A headless VTuber/PNGTuber service for Linux written in Rust.
 git clone https://github.com/fushigivt/fushigi3d.git
 cd fushigi3d
 
-# Download a free VRM model and placeholder sprites
+# Download free VRM models and placeholder sprites
 ./scripts/setup.sh
 
 # Build and run (opens 3D viewport by default)

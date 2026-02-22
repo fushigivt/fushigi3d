@@ -107,7 +107,7 @@ reconnect_delay_secs = 5
 
 [http]
 # Enable HTTP server for browser source and dashboard
-enabled = true
+enabled = false
 # HTTP server host
 host = "127.0.0.1"
 # HTTP server port

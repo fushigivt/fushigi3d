@@ -469,7 +469,7 @@ pub struct HttpConfig {
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             host: "127.0.0.1".to_string(),
             port: 8080,
             cors_enabled: true,
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(config.audio.device, "default");
         assert_eq!(config.audio.sample_rate, 16000);
         assert!(!config.obs.enabled);
-        assert!(config.http.enabled);
+        assert!(!config.http.enabled);
     }
 
     #[test]
