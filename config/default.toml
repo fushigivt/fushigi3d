@@ -85,13 +85,13 @@ expression_fade_duration = 0.4
 expression_easing = "quad_in_out"
 
 [obs]
-# Enable OBS WebSocket integration
+# Enable OBS WebSocket integration (for scene/source switching, not needed for window capture)
 enabled = false
 # OBS WebSocket host
 host = "127.0.0.1"
-# OBS WebSocket port
+# OBS WebSocket port (default: 4455, matches OBS Tools > WebSocket Server Settings)
 port = 4455
-# OBS WebSocket password (leave empty if not set)
+# OBS WebSocket password (leave empty if authentication is disabled in OBS)
 password = ""
 # Output mode: "scene" (switch scenes) or "source" (toggle source visibility)
 mode = "scene"

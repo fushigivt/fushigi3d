@@ -266,7 +266,8 @@ impl RustuberApp {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_title("rustuber")
-                .with_inner_size([800.0, 600.0]),
+                .with_inner_size([800.0, 600.0])
+                .with_transparent(true),
             ..Default::default()
         };
 
@@ -387,6 +388,7 @@ impl RustuberApp {
         renderer.set_camera_distance(self.camera_distance);
         renderer.set_mirrored(self.mirrored);
         renderer.set_use_textures(self.textured);
+        renderer.set_transparent_bg(!self.show_controls);
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -512,6 +514,15 @@ impl eframe::App for RustuberApp {
             self.show_controls = !self.show_controls;
         }
 
+        // When controls are hidden, make the entire background transparent
+        if !self.show_controls {
+            let mut visuals = ctx.style().visuals.clone();
+            visuals.panel_fill = egui::Color32::TRANSPARENT;
+            visuals.window_fill = egui::Color32::TRANSPARENT;
+            ctx.set_visuals(visuals);
+        }
+
+        if self.show_controls {
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.label("rustuber");
@@ -521,6 +532,7 @@ impl eframe::App for RustuberApp {
                 });
             });
         });
+        }
 
         if self.show_controls {
         egui::SidePanel::left("controls").show(ctx, |ui| {
@@ -618,7 +630,19 @@ impl eframe::App for RustuberApp {
                 if obs_connected {
                     ui.colored_label(theme.green, "connected");
                 } else {
-                    ui.colored_label(theme.red, "disconnected");
+                    // Check config to distinguish disabled vs disconnected
+                    let config = {
+                        let rt = tokio::runtime::Handle::try_current();
+                        rt.ok().map(|h| tokio::task::block_in_place(|| h.block_on(self.state.config.read()).obs.enabled))
+                    };
+                    if config == Some(true) {
+                        ui.colored_label(theme.red, "disconnected");
+                        if ui.small_button("reconnect").clicked() {
+                            self.state.signal_obs_reconnect();
+                        }
+                    } else {
+                        ui.label("disabled");
+                    }
                 }
             });
 

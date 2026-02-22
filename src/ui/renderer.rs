@@ -104,6 +104,8 @@ pub struct VrmRenderer {
     _textures: Vec<wgpu::Texture>,
     // Global toggle: use textures vs white shading
     use_textures: AtomicBool,
+    // Transparent background mode
+    transparent_bg: AtomicBool,
 }
 
 struct LightInfo {
@@ -458,6 +460,7 @@ impl VrmRenderer {
             ambient: [0.15, 0.15, 0.18, 1.0],
             _textures: gpu_textures,
             use_textures: AtomicBool::new(true),
+            transparent_bg: AtomicBool::new(false),
         }
     }
 
@@ -525,6 +528,11 @@ impl VrmRenderer {
         self.use_textures.store(enabled, Ordering::Relaxed);
     }
 
+    /// Toggle transparent background (for OBS window capture with alpha).
+    pub fn set_transparent_bg(&self, enabled: bool) {
+        self.transparent_bg.store(enabled, Ordering::Relaxed);
+    }
+
     /// Update vertex buffers with skinned positions and base normals.
     ///
     /// `skinned_meshes`: per-mesh Vec of per-primitive Vec of skinned positions.
@@ -581,6 +589,7 @@ impl VrmRenderer {
         };
         let mvp = state.projection_matrix * state.view_matrix * model_mat;
         let use_tex = self.use_textures.load(Ordering::Relaxed);
+        let transparent = self.transparent_bg.load(Ordering::Relaxed);
 
         // Update all uniform buffers
         for dc in &self.draw_calls {
@@ -612,11 +621,10 @@ impl VrmRenderer {
                     view: &state.offscreen_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.12,
-                            g: 0.12,
-                            b: 0.16,
-                            a: 1.0,
+                        load: wgpu::LoadOp::Clear(if transparent {
+                            wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
+                        } else {
+                            wgpu::Color { r: 0.12, g: 0.12, b: 0.16, a: 1.0 }
                         }),
                         store: wgpu::StoreOp::Store,
                     },

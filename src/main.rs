@@ -430,9 +430,8 @@ async fn run_obs_client(state: Arc<AppState>) -> anyhow::Result<()> {
                     match result {
                         Ok(avatar_state) => {
                             if let Err(e) = client.update_state(&avatar_state).await {
-                                error!("Failed to update OBS: {}", e);
-                                state.set_obs_connected(false);
-                                break; // Reconnect
+                                // Scene/source not found is non-fatal — just log once
+                                tracing::warn!("OBS update: {}", e);
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {

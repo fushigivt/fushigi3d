@@ -79,6 +79,9 @@ impl ObsClient {
 
         tracing::debug!("Updating OBS state to: {}", scene_name);
 
+        // Record the state now so we don't retry on every frame if it fails
+        self.last_state = Some(scene_name.to_string());
+
         match self.config.mode {
             ObsMode::Scene => {
                 self.switch_scene(client, scene_name).await?;
@@ -88,7 +91,6 @@ impl ObsClient {
             }
         }
 
-        self.last_state = Some(scene_name.to_string());
         Ok(())
     }
 
