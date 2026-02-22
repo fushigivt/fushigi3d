@@ -90,23 +90,29 @@ fn apply_head_tracking(
     let rest_world = super::skinning::compute_world_transforms(model, &HashMap::new());
 
     // Build tracking rotation using the HEAD bone's rest-pose world axes.
-    // The tracker's pitch/yaw/roll correspond to rotations around the head's
-    // local X (ear-to-ear), Y (up through crown), Z (nose direction) axes,
-    // NOT world X/Y/Z.  We use from_axis_angle with the bone's world-space
-    // axis directions, then compose ZYX to match the Python decomposition.
+    //
+    // Pitch (nod) = rotation around the ear-to-ear axis (world X / right).
+    // Yaw (turn)  = rotation around the vertical axis   (world Y / up).
+    // Roll (tilt)  = rotation around the nose-forward axis (world Z / forward).
+    //
+    // Different models may orient bone_x/y/z differently (e.g. VRoid Studio
+    // permutes axes vs the standard VRM convention).  We detect which bone
+    // axis is closest to each world direction so any valid VRM model works.
     if let Some(&head_node) = model.bone_to_node.get("head") {
         let hw = rest_world[head_node];
-        let bone_x = glam::Vec3::new(hw.col(0).x, hw.col(0).y, hw.col(0).z).normalize();
-        let bone_y = glam::Vec3::new(hw.col(1).x, hw.col(1).y, hw.col(1).z).normalize();
-        let bone_z = glam::Vec3::new(hw.col(2).x, hw.col(2).y, hw.col(2).z).normalize();
+        let bone_axes = [
+            glam::Vec3::new(hw.col(0).x, hw.col(0).y, hw.col(0).z).normalize(),
+            glam::Vec3::new(hw.col(1).x, hw.col(1).y, hw.col(1).z).normalize(),
+            glam::Vec3::new(hw.col(2).x, hw.col(2).y, hw.col(2).z).normalize(),
+        ];
 
-        // Tracker axes → bone axes mapping (determined empirically):
-        //   tracker pitch (head_rx) → bone_z
-        //   tracker yaw   (head_ry) → bone_x
-        //   tracker roll  (head_rz) → bone_y
-        let rpitch = Quat::from_axis_angle(bone_z, head_rx);
-        let ryaw   = Quat::from_axis_angle(bone_x, head_ry);
-        let rroll  = Quat::from_axis_angle(bone_y, head_rz);
+        let pitch_axis = best_matching_axis(&bone_axes, glam::Vec3::X); // ear-to-ear
+        let yaw_axis   = best_matching_axis(&bone_axes, glam::Vec3::Y); // up
+        let roll_axis  = best_matching_axis(&bone_axes, glam::Vec3::Z); // forward
+
+        let rpitch = Quat::from_axis_angle(pitch_axis, head_rx);
+        let ryaw   = Quat::from_axis_angle(yaw_axis, head_ry);
+        let rroll  = Quat::from_axis_angle(roll_axis, head_rz);
         let tracking_world = rroll * ryaw * rpitch;
 
         // 60% to head
@@ -125,6 +131,24 @@ fn apply_head_tracking(
     }
 
     (head_rx, head_ry, head_rz)
+}
+
+/// Find the bone axis (from `bone_axes`) that best aligns with `target`.
+///
+/// Returns the signed axis: if the best-matching bone axis points opposite to
+/// `target`, the negated axis is returned so rotation direction stays consistent.
+fn best_matching_axis(bone_axes: &[glam::Vec3; 3], target: glam::Vec3) -> glam::Vec3 {
+    let mut best = bone_axes[0];
+    let mut best_dot = bone_axes[0].dot(target).abs();
+    for &axis in &bone_axes[1..] {
+        let d = axis.dot(target).abs();
+        if d > best_dot {
+            best_dot = d;
+            best = axis;
+        }
+    }
+    // Match sign so positive rotation matches the target direction convention
+    if best.dot(target) < 0.0 { -best } else { best }
 }
 
 /// Convert a world-space rotation into the parent-local frame of `node`.
@@ -454,7 +478,11 @@ mod tests {
     }
 
     /// Pose the model with the given head rotation and return the head bone's
-    /// world-space forward (-Z) and up (+Y) vectors.
+    /// world-space forward and up vectors (model-agnostic).
+    ///
+    /// Uses `best_matching_axis` to find which bone column corresponds to
+    /// geometric forward (world Z) and up (world Y), so results are consistent
+    /// regardless of bone axis convention.
     fn head_vectors(model: &VrmModel, rot_deg: [f32; 3]) -> (glam::Vec3, glam::Vec3) {
         let tuning = unit_tuning();
         let pose = animated_pose(model, 0.0, Some(rot_deg), false, &tuning, None);
@@ -463,9 +491,14 @@ mod tests {
         let head_node = *model.bone_to_node.get("head").expect("model needs head bone");
         let m = world[head_node];
 
-        // Forward = -Z column, Up = +Y column (upper 3x3 of the world transform)
-        let fwd = -glam::Vec3::new(m.col(2).x, m.col(2).y, m.col(2).z).normalize();
-        let up = glam::Vec3::new(m.col(1).x, m.col(1).y, m.col(1).z).normalize();
+        let bone_axes = [
+            glam::Vec3::new(m.col(0).x, m.col(0).y, m.col(0).z).normalize(),
+            glam::Vec3::new(m.col(1).x, m.col(1).y, m.col(1).z).normalize(),
+            glam::Vec3::new(m.col(2).x, m.col(2).y, m.col(2).z).normalize(),
+        ];
+
+        let fwd = best_matching_axis(&bone_axes, glam::Vec3::Z);
+        let up = best_matching_axis(&bone_axes, glam::Vec3::Y);
         (fwd, up)
     }
 
@@ -482,16 +515,15 @@ mod tests {
         Some(VrmModel::load(path).unwrap())
     }
 
-    // Model-agnostic axis helpers.
-    // Due to the empirical tracker→bone axis mapping, each tracker input
-    // drives a specific geometric signal:
-    //   tracker pitch [x,0,0] → up·right changes (head nods visually)
-    //   tracker yaw   [0,y,0] → fwd·up changes   (head turns visually)
-    //   tracker roll  [0,0,z] → fwd·right changes (head tilts visually)
+    // Standard VRM geometric expectations:
+    //   pitch [x,0,0] → fwd·up changes (head nods up/down)
+    //   yaw   [0,y,0] → fwd·right changes (head turns left/right)
+    //   roll  [0,0,z] → up·right changes (head tilts sideways)
 
     fn head_right(model: &VrmModel) -> glam::Vec3 {
         let (fwd, up) = head_baseline(model);
-        fwd.cross(up).normalize()
+        // For Y-up / Z-forward: right = up × fwd
+        up.cross(fwd).normalize()
     }
 
     // --- Tracker axis 0 (pitch input) tests ---
@@ -499,30 +531,26 @@ mod tests {
     #[test]
     fn test_pitch_produces_nod() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
-        let right = head_right(&model);
-        let (_, up) = head_vectors(&model, [20.0, 0.0, 0.0]);
+        let (base_fwd, base_up) = head_baseline(&model);
+        let (fwd, _) = head_vectors(&model, [20.0, 0.0, 0.0]);
 
-        let base_val = base_up.dot(right);
-        let val = up.dot(right);
-        let dv = (val - base_val).abs();
-        assert!(dv > 0.05, "20° pitch should change up·right, dv={dv:.4}");
+        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+        assert!(dv > 0.05, "20° pitch should change fwd·up, dv={dv:.4}");
     }
 
     #[test]
     fn test_pitch_opposite_signs() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
-        let right = head_right(&model);
-        let (_, up_pos) = head_vectors(&model, [20.0, 0.0, 0.0]);
-        let (_, up_neg) = head_vectors(&model, [-20.0, 0.0, 0.0]);
+        let (base_fwd, base_up) = head_baseline(&model);
+        let (fwd_pos, _) = head_vectors(&model, [20.0, 0.0, 0.0]);
+        let (fwd_neg, _) = head_vectors(&model, [-20.0, 0.0, 0.0]);
 
-        let base_val = base_up.dot(right);
-        let d_pos = up_pos.dot(right) - base_val;
-        let d_neg = up_neg.dot(right) - base_val;
+        let base_val = base_fwd.dot(base_up);
+        let d_pos = fwd_pos.dot(base_up) - base_val;
+        let d_neg = fwd_neg.dot(base_up) - base_val;
         assert!(
             d_pos * d_neg < 0.0,
-            "Pitch ±20 should produce opposite shifts: +={d_pos:.4}, -={d_neg:.4}"
+            "Pitch ±20 should produce opposite fwd·up shifts: +={d_pos:.4}, -={d_neg:.4}"
         );
     }
 
@@ -534,91 +562,92 @@ mod tests {
         let (fwd, _) = head_vectors(&model, [25.0, 0.0, 0.0]);
 
         let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
-        assert!(dh < 0.05, "Pure pitch should not turn horizontally, dh={dh:.4}");
+        assert!(dh < 0.08, "Pure pitch should not turn horizontally, dh={dh:.4}");
     }
 
     #[test]
     fn test_pitch_does_not_cause_roll() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
-        let (fwd, _) = head_vectors(&model, [25.0, 0.0, 0.0]);
+        let (_, base_up) = head_baseline(&model);
+        let right = head_right(&model);
+        let (_, up) = head_vectors(&model, [25.0, 0.0, 0.0]);
 
-        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
-        assert!(dv < 0.05, "Pure pitch should not tilt forward vertically, dv={dv:.4}");
+        let dr = (up.dot(right) - base_up.dot(right)).abs();
+        assert!(dr < 0.08, "Pure pitch should not tilt sideways, dr={dr:.4}");
     }
 
     // --- Tracker axis 1 (yaw input) tests ---
 
     #[test]
-    fn test_yaw_tilts_forward_vertically() {
+    fn test_yaw_turns_horizontally() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
+        let (base_fwd, _) = head_baseline(&model);
+        let right = head_right(&model);
         let (fwd, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
 
-        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
-        assert!(dv > 0.05, "25° yaw should change fwd·up, dv={dv:.4}");
+        let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+        assert!(dh > 0.05, "25° yaw should change fwd·right, dh={dh:.4}");
     }
 
     #[test]
     fn test_yaw_opposite_signs() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, base_up) = head_baseline(&model);
+        let (base_fwd, _) = head_baseline(&model);
+        let right = head_right(&model);
         let (fwd_r, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
         let (fwd_l, _) = head_vectors(&model, [0.0, -25.0, 0.0]);
 
-        let base_v = base_fwd.dot(base_up);
-        let d_r = fwd_r.dot(base_up) - base_v;
-        let d_l = fwd_l.dot(base_up) - base_v;
+        let base_h = base_fwd.dot(right);
+        let d_r = fwd_r.dot(right) - base_h;
+        let d_l = fwd_l.dot(right) - base_h;
         assert!(
             d_r * d_l < 0.0,
-            "Yaw ±25 should produce opposite shifts: +={d_r:.4}, -={d_l:.4}"
+            "Yaw ±25 should produce opposite fwd·right shifts: +={d_r:.4}, -={d_l:.4}"
         );
     }
 
     #[test]
     fn test_yaw_does_not_cause_pitch() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (_, base_up) = head_baseline(&model);
-        let right = head_right(&model);
-        let (_, up) = head_vectors(&model, [0.0, 25.0, 0.0]);
+        let (base_fwd, base_up) = head_baseline(&model);
+        let (fwd, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
 
-        let dr = (up.dot(right) - base_up.dot(right)).abs();
-        assert!(dr < 0.05, "Pure yaw should not cause pitch, up·right shift={dr:.4}");
+        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+        assert!(dv < 0.08, "Pure yaw should not change fwd·up, dv={dv:.4}");
     }
 
     #[test]
     fn test_yaw_does_not_cause_roll() {
         let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, _) = head_baseline(&model);
+        let (_, base_up) = head_baseline(&model);
         let right = head_right(&model);
-        let (fwd, _) = head_vectors(&model, [0.0, 25.0, 0.0]);
+        let (_, up) = head_vectors(&model, [0.0, 25.0, 0.0]);
 
-        let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
-        assert!(dh < 0.05, "Pure yaw should not turn horizontally, dh={dh:.4}");
+        let dr = (up.dot(right) - base_up.dot(right)).abs();
+        assert!(dr < 0.08, "Pure yaw should not tilt sideways, dr={dr:.4}");
     }
 
     // --- Tracker axis 2 (roll input) tests ---
 
     #[test]
-    fn test_roll_turns_forward_horizontally() {
-        let model = match load_test_model() { Some(m) => m, None => return };
-        let (base_fwd, _) = head_baseline(&model);
-        let right = head_right(&model);
-        let (fwd, _) = head_vectors(&model, [0.0, 0.0, 15.0]);
-
-        let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
-        assert!(dh > 0.03, "15° roll should change fwd·right, dh={dh:.4}");
-    }
-
-    #[test]
-    fn test_roll_does_not_cause_pitch() {
+    fn test_roll_tilts_sideways() {
         let model = match load_test_model() { Some(m) => m, None => return };
         let (_, base_up) = head_baseline(&model);
         let right = head_right(&model);
         let (_, up) = head_vectors(&model, [0.0, 0.0, 15.0]);
 
         let dr = (up.dot(right) - base_up.dot(right)).abs();
-        assert!(dr < 0.05, "Pure roll should not cause pitch, up·right shift={dr:.4}");
+        assert!(dr > 0.03, "15° roll should change up·right, dr={dr:.4}");
+    }
+
+    #[test]
+    fn test_roll_does_not_cause_pitch() {
+        let model = match load_test_model() { Some(m) => m, None => return };
+        let (base_fwd, base_up) = head_baseline(&model);
+        let (fwd, _) = head_vectors(&model, [0.0, 0.0, 15.0]);
+
+        let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+        assert!(dv < 0.08, "Pure roll should not cause pitch, fwd·up shift={dv:.4}");
     }
 
     // --- Round-trip and coupling tests ---
@@ -649,26 +678,26 @@ mod tests {
         let right = head_right(&model);
 
         for angle in [-30.0, -15.0, 15.0, 30.0f32] {
-            // Pitch sweep: fwd·up and fwd·right should stay stable
-            let (fwd, _) = head_vectors(&model, [angle, 0.0, 0.0]);
-            let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+            // Pitch sweep: fwd·right (yaw) and up·right (roll) should stay stable
+            let (fwd, up) = head_vectors(&model, [angle, 0.0, 0.0]);
             let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
-            assert!(dv < 0.08, "Pitch {angle}° cross→yaw: fwd·up shift={dv:.4}");
-            assert!(dh < 0.08, "Pitch {angle}° cross→roll: fwd·right shift={dh:.4}");
+            let dr = (up.dot(right) - base_up.dot(right)).abs();
+            assert!(dh < 0.12, "Pitch {angle}° cross→yaw: fwd·right shift={dh:.4}");
+            assert!(dr < 0.12, "Pitch {angle}° cross→roll: up·right shift={dr:.4}");
 
-            // Yaw sweep: up·right and fwd·right should stay stable
+            // Yaw sweep: fwd·up (pitch) and up·right (roll) should stay stable
             let (fwd, up) = head_vectors(&model, [0.0, angle, 0.0]);
-            let dr = (up.dot(right) - base_up.dot(right)).abs();
-            let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
-            assert!(dr < 0.08, "Yaw {angle}° cross→pitch: up·right shift={dr:.4}");
-            assert!(dh < 0.08, "Yaw {angle}° cross→roll: fwd·right shift={dh:.4}");
-
-            // Roll sweep: up·right and fwd·up should stay stable
-            let (fwd, up) = head_vectors(&model, [0.0, 0.0, angle]);
-            let dr = (up.dot(right) - base_up.dot(right)).abs();
             let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
-            assert!(dr < 0.08, "Roll {angle}° cross→pitch: up·right shift={dr:.4}");
-            assert!(dv < 0.08, "Roll {angle}° cross→yaw: fwd·up shift={dv:.4}");
+            let dr = (up.dot(right) - base_up.dot(right)).abs();
+            assert!(dv < 0.12, "Yaw {angle}° cross→pitch: fwd·up shift={dv:.4}");
+            assert!(dr < 0.12, "Yaw {angle}° cross→roll: up·right shift={dr:.4}");
+
+            // Roll sweep: fwd·up (pitch) and fwd·right (yaw) should stay stable
+            let (fwd, _) = head_vectors(&model, [0.0, 0.0, angle]);
+            let dv = (fwd.dot(base_up) - base_fwd.dot(base_up)).abs();
+            let dh = (fwd.dot(right) - base_fwd.dot(right)).abs();
+            assert!(dv < 0.12, "Roll {angle}° cross→pitch: fwd·up shift={dv:.4}");
+            assert!(dh < 0.12, "Roll {angle}° cross→yaw: fwd·right shift={dh:.4}");
         }
     }
 

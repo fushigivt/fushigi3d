@@ -185,11 +185,12 @@ mod tests {
         }
         let model = VrmModel::load(model_path).unwrap();
 
+        let face_idx = model.face_mesh_idx.unwrap_or(1);
         let zero_weights = vec![0.0f32; model.morph_target_names.len()];
-        let morphed = apply_morph_targets(&model, 1, &zero_weights);
+        let morphed = apply_morph_targets(&model, face_idx, &zero_weights);
 
         // With zero weights, morphed should equal base positions
-        for (prim_idx, prim) in model.meshes[1].primitives.iter().enumerate() {
+        for (prim_idx, prim) in model.meshes[face_idx].primitives.iter().enumerate() {
             assert_eq!(morphed[prim_idx].len(), prim.positions.len());
             for (a, b) in morphed[prim_idx].iter().zip(prim.positions.iter()) {
                 assert!((a.x - b.x).abs() < 1e-6);

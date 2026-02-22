@@ -305,8 +305,11 @@ fn correct_elbow_pole(
         let upper_from = Vec3::from_array(*upper_from);
         if let Some(upper_dir) = (*elbow_pos - upper_from).try_normalize() {
             let bend_normal = upper_dir.cross(*tracked_dir_world);
-            // Positive Z → elbow forward → flip
-            if bend_normal.length_squared() > 0.0001 && bend_normal.z > 0.0 {
+            // Only correct when the arm is significantly bent (not near-straight).
+            // Near-straight arms have a tiny cross product that's numerically
+            // unreliable, so require a minimum bend to avoid spurious flips.
+            let bend_mag = bend_normal.length();
+            if bend_mag > 0.1 && bend_normal.z / bend_mag > 0.3 {
                 let flip =
                     Quat::from_axis_angle(*tracked_dir_local, std::f32::consts::PI);
                 return flip * delta;

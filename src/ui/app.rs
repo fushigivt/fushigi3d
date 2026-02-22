@@ -221,7 +221,11 @@ impl Fushigi3dApp {
         };
 
         // Create blendshape mapper
-        let mapper = BlendshapeMapper::new(&model.morph_target_names);
+        let mapper = BlendshapeMapper::new(
+            &model.morph_target_names,
+            &model.expression_binds,
+            &model.binary_expressions,
+        );
 
         // Create renderer
         let device = &render_state.device;
@@ -477,8 +481,8 @@ impl Fushigi3dApp {
         // Skin each mesh
         let mut skinned_meshes = Vec::with_capacity(model.meshes.len());
         for (mesh_idx, _mesh) in model.meshes.iter().enumerate() {
-            // Face mesh (index 1) gets morph targets applied first
-            let base = if mesh_idx == 1 {
+            // Face mesh gets morph targets applied first
+            let base = if Some(mesh_idx) == model.face_mesh_idx {
                 skinning::apply_morph_targets(&model, mesh_idx, &morph_weights)
             } else {
                 skinning::base_positions(&model, mesh_idx)

@@ -70,24 +70,70 @@ fn suppress_blink_crosstalk(left: f32, right: f32) -> (f32, f32) {
     }
 }
 
+use super::vrm_loader::ExpressionBind;
+
 /// Maps ARKit blendshape names to VRM morph target weights.
+///
+/// Supports two modes:
+/// - **Name-based**: model has `Fcl_*` morph target names (VRoid Studio models)
+/// - **Expression-based**: model has VRM expression binds (any VRM 1.0/0.x model)
 pub struct BlendshapeMapper {
-    /// VRM morph target name → index in the weights array
+    /// VRM morph target name → index in the weights array (name-based mode)
     name_to_index: HashMap<String, usize>,
+    /// VRM expression name → morph target binds (expression-based mode)
+    expression_binds: HashMap<String, Vec<ExpressionBind>>,
+    /// Expressions marked as isBinary (snap to 0 or 1)
+    binary_expressions: std::collections::HashSet<String>,
+    /// Whether to use expression-based mapping
+    use_expressions: bool,
     /// Total number of morph targets
     num_targets: usize,
 }
 
 impl BlendshapeMapper {
-    /// Create a new mapper from the model's morph target name list.
-    pub fn new(morph_target_names: &[String]) -> Self {
+    /// Create a mapper from the model's morph target names and expression binds.
+    ///
+    /// If the model has `Fcl_` morph target names, uses direct name mapping.
+    /// Otherwise falls back to VRM expression binds.
+    pub fn new(
+        morph_target_names: &[String],
+        expression_binds: &HashMap<String, Vec<ExpressionBind>>,
+        binary_expressions: &std::collections::HashSet<String>,
+    ) -> Self {
         let mut name_to_index = HashMap::new();
         for (i, name) in morph_target_names.iter().enumerate() {
             name_to_index.insert(name.clone(), i);
         }
+
+        // Use expression-based mapping if model doesn't have Fcl_ names
+        let has_fcl = name_to_index.keys().any(|k| k.starts_with("Fcl_"));
+        let use_expressions = !has_fcl && !expression_binds.is_empty();
+
+        if use_expressions {
+            tracing::info!(
+                "Using VRM expression-based blendshape mapping ({} expressions)",
+                expression_binds.len()
+            );
+        } else if has_fcl {
+            tracing::info!(
+                "Using Fcl_ name-based blendshape mapping ({} targets)",
+                name_to_index.len()
+            );
+        }
+
         Self {
-            num_targets: morph_target_names.len(),
+            num_targets: morph_target_names.len().max(
+                expression_binds
+                    .values()
+                    .flat_map(|v| v.iter())
+                    .map(|b| b.morph_index + 1)
+                    .max()
+                    .unwrap_or(0),
+            ),
             name_to_index,
+            expression_binds: expression_binds.clone(),
+            binary_expressions: binary_expressions.clone(),
+            use_expressions,
         }
     }
 
@@ -103,29 +149,35 @@ impl BlendshapeMapper {
         sensitivity: f32,
         head_yaw_rad: f32,
     ) -> Vec<f32> {
-        let mut weights = vec![0.0f32; self.num_targets];
+        if self.use_expressions {
+            self.map_via_expressions(arkit, sensitivity, head_yaw_rad)
+        } else {
+            self.map_via_names(arkit, sensitivity, head_yaw_rad)
+        }
+    }
 
-        // Apply sensitivity multiplier to raw values via helper
+    /// Name-based mapping for models with `Fcl_*` morph target names (VRoid Studio).
+    fn map_via_names(
+        &self,
+        arkit: &HashMap<String, f32>,
+        sensitivity: f32,
+        head_yaw_rad: f32,
+    ) -> Vec<f32> {
+        let mut weights = vec![0.0f32; self.num_targets];
         let get = |key: &str| -> f32 { Self::get(arkit, key) * sensitivity };
 
-        // Direct mappings: ARKit name → VRM morph target name
         self.set_weight(&mut weights, "Fcl_MTH_A", get("jawOpen"));
         self.set_weight(&mut weights, "Fcl_MTH_U", get("mouthPucker"));
         self.set_weight(&mut weights, "Fcl_MTH_O", get("mouthFunnel"));
 
-        // mouthStretchLeft/Right → Fcl_MTH_I (average)
         let stretch_l = get("mouthStretchLeft");
         let stretch_r = get("mouthStretchRight");
         self.set_weight(&mut weights, "Fcl_MTH_I", (stretch_l + stretch_r) * 0.5);
 
-        // mouthSmileLeft/Right → Fcl_MTH_E (×0.6)
         let smile_l = get("mouthSmileLeft");
         let smile_r = get("mouthSmileRight");
         self.set_weight(&mut weights, "Fcl_MTH_E", (smile_l + smile_r) * 0.6);
 
-        // Blink: track each eye independently.
-        // 1) Compensate for eye occlusion when head is turned (far eye unreliable)
-        // 2) Suppress MediaPipe crosstalk leak (~0.2-0.4 on opposite eye when winking)
         let blink_l_raw = get("eyeBlinkLeft");
         let blink_r_raw = get("eyeBlinkRight");
         let (blink_l_occ, blink_r_occ) =
@@ -133,10 +185,8 @@ impl BlendshapeMapper {
         let (blink_l, blink_r) = suppress_blink_crosstalk(blink_l_occ, blink_r_occ);
         self.set_weight(&mut weights, "Fcl_EYE_Close_L", blink_l);
         self.set_weight(&mut weights, "Fcl_EYE_Close_R", blink_r);
-        // Also set the combined target for models that only have Fcl_EYE_Close
         self.set_weight(&mut weights, "Fcl_EYE_Close", (blink_l + blink_r) * 0.5);
 
-        // Derived emotions from blendshape combinations
         let avg_smile = (smile_l + smile_r) * 0.5;
         if avg_smile > 0.35 {
             self.set_weight(&mut weights, "Fcl_ALL_Joy", (avg_smile - 0.35) * 1.5);
@@ -168,9 +218,91 @@ impl BlendshapeMapper {
         weights
     }
 
+    /// Expression-based mapping for any VRM model (uses VRM expression binds).
+    ///
+    /// Maps ARKit blendshapes → VRM expression presets → morph target indices.
+    fn map_via_expressions(
+        &self,
+        arkit: &HashMap<String, f32>,
+        sensitivity: f32,
+        head_yaw_rad: f32,
+    ) -> Vec<f32> {
+        let mut weights = vec![0.0f32; self.num_targets];
+        let get = |key: &str| -> f32 { Self::get(arkit, key) * sensitivity };
+
+        // Mouth vowels: ARKit → VRM expression preset
+        self.set_expression(&mut weights, "aa", get("jawOpen"));
+        self.set_expression(&mut weights, "ou", get("mouthPucker"));
+        self.set_expression(&mut weights, "oh", get("mouthFunnel"));
+
+        let stretch_l = get("mouthStretchLeft");
+        let stretch_r = get("mouthStretchRight");
+        self.set_expression(&mut weights, "ih", (stretch_l + stretch_r) * 0.5);
+
+        let smile_l = get("mouthSmileLeft");
+        let smile_r = get("mouthSmileRight");
+        self.set_expression(&mut weights, "ee", (smile_l + smile_r) * 0.6);
+
+        // Blink with occlusion compensation and crosstalk suppression
+        let blink_l_raw = get("eyeBlinkLeft");
+        let blink_r_raw = get("eyeBlinkRight");
+        let (blink_l_occ, blink_r_occ) =
+            compensate_eye_occlusion(blink_l_raw, blink_r_raw, head_yaw_rad);
+        let (blink_l, blink_r) = suppress_blink_crosstalk(blink_l_occ, blink_r_occ);
+        self.set_expression(&mut weights, "blinkLeft", blink_l);
+        self.set_expression(&mut weights, "blinkRight", blink_r);
+        self.set_expression(&mut weights, "blink", (blink_l + blink_r) * 0.5);
+
+        // Derived emotions
+        let avg_smile = (smile_l + smile_r) * 0.5;
+        if avg_smile > 0.35 {
+            self.set_expression(&mut weights, "happy", (avg_smile - 0.35) * 1.5);
+        }
+
+        let eye_wide_l = get("eyeWideLeft");
+        let eye_wide_r = get("eyeWideRight");
+        let jaw_open = get("jawOpen");
+        let avg_eye_wide = (eye_wide_l + eye_wide_r) * 0.5;
+        if avg_eye_wide > 0.2 && jaw_open > 0.2 {
+            self.set_expression(
+                &mut weights,
+                "surprised",
+                (avg_eye_wide + jaw_open) * 0.5,
+            );
+        }
+
+        let brow_down_l = get("browDownLeft");
+        let brow_down_r = get("browDownRight");
+        let avg_brow_down = (brow_down_l + brow_down_r) * 0.5;
+        if avg_brow_down > 0.3 {
+            self.set_expression(&mut weights, "angry", (avg_brow_down - 0.3) * 1.4);
+        }
+
+        weights
+    }
+
+    /// Set morph weight by Fcl_ name (name-based mode).
     fn set_weight(&self, weights: &mut [f32], name: &str, value: f32) {
         if let Some(&idx) = self.name_to_index.get(name) {
             weights[idx] = value.clamp(0.0, 1.0);
+        }
+    }
+
+    /// Set morph weights via VRM expression binds (expression-based mode).
+    ///
+    /// If the expression is marked `isBinary`, the value snaps to 0.0 or 1.0.
+    fn set_expression(&self, weights: &mut [f32], expression: &str, value: f32) {
+        if let Some(binds) = self.expression_binds.get(expression) {
+            let mut clamped = value.clamp(0.0, 1.0);
+            if self.binary_expressions.contains(expression) {
+                clamped = if clamped >= 0.5 { 1.0 } else { 0.0 };
+            }
+            for bind in binds {
+                if bind.morph_index < weights.len() {
+                    weights[bind.morph_index] =
+                        (weights[bind.morph_index] + clamped * bind.weight).clamp(0.0, 1.0);
+                }
+            }
         }
     }
 
@@ -222,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_jaw_open_maps_to_mouth_a() {
-        let mapper = BlendshapeMapper::new(&sample_names());
+        let mapper = BlendshapeMapper::new(&sample_names(), &HashMap::new(), &Default::default());
         let mut arkit = HashMap::new();
         arkit.insert("jawOpen".to_string(), 0.8);
 
@@ -232,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_blink_maps_separately() {
-        let mapper = BlendshapeMapper::new(&sample_names());
+        let mapper = BlendshapeMapper::new(&sample_names(), &HashMap::new(), &Default::default());
         let mut arkit = HashMap::new();
         arkit.insert("eyeBlinkLeft".to_string(), 0.6);
         arkit.insert("eyeBlinkRight".to_string(), 0.8);
@@ -259,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_smile_triggers_joy() {
-        let mapper = BlendshapeMapper::new(&sample_names());
+        let mapper = BlendshapeMapper::new(&sample_names(), &HashMap::new(), &Default::default());
         let mut arkit = HashMap::new();
         arkit.insert("mouthSmileLeft".to_string(), 0.9);
         arkit.insert("mouthSmileRight".to_string(), 0.9);
@@ -345,7 +477,7 @@ mod tests {
     #[test]
     fn test_occlusion_with_mapper() {
         // End-to-end: head turned right, left eye should mirror right via mapper
-        let mapper = BlendshapeMapper::new(&sample_names());
+        let mapper = BlendshapeMapper::new(&sample_names(), &HashMap::new(), &Default::default());
         let mut arkit = HashMap::new();
         arkit.insert("eyeBlinkLeft".to_string(), 0.9); // unreliable (occluded)
         arkit.insert("eyeBlinkRight".to_string(), 0.1); // visible eye open
@@ -362,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_empty_blendshapes() {
-        let mapper = BlendshapeMapper::new(&sample_names());
+        let mapper = BlendshapeMapper::new(&sample_names(), &HashMap::new(), &Default::default());
         let arkit = HashMap::new();
         let weights = mapper.map_blendshapes(&arkit, 1.0, 0.0);
         assert!(weights.iter().all(|&w| w == 0.0));
