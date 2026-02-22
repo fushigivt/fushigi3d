@@ -4468,6 +4468,8 @@ dependencies = [
 [[package]]
 name = "signal-smooth"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e30f9e08ef474e02b753c259ad46a02ad102726cb483d761304afad20536b81c"
 
 [[package]]
 name = "simd-adler32"

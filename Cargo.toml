@@ -8,7 +8,7 @@ license = "GPL-3.0-only"
 repository = "https://github.com/fushigivt/fushigi3d"
 
 [dependencies]
-signal-smooth = { path = "crates/signal-smooth" }
+signal-smooth = "0.1.0"
 
 # Audio & VAD
 cpal = "0.15"
