@@ -87,6 +87,8 @@ pub struct RustuberApp {
     spring_gravity: f32,
     /// Collider radius multiplier (1.0 = authored, higher = larger collision volumes)
     spring_collider_scale: f32,
+    /// Whether to render with textures (true) or white/lit shading (false)
+    textured: bool,
 }
 
 impl RustuberApp {
@@ -154,6 +156,7 @@ impl RustuberApp {
             spring_bones_enabled: true,
             spring_gravity: 1.0,
             spring_collider_scale: 1.3,
+            textured: true,
         };
 
         // Try to load VRM model and initialize renderer
@@ -380,6 +383,7 @@ impl RustuberApp {
 
         renderer.set_camera_distance(self.camera_distance);
         renderer.set_mirrored(self.mirrored);
+        renderer.set_use_textures(self.textured);
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -531,6 +535,7 @@ impl eframe::App for RustuberApp {
                     }
                     ui.separator();
                     ui.checkbox(&mut self.mirrored, "Mirror");
+                    ui.checkbox(&mut self.textured, "Textured");
                 });
             }
 

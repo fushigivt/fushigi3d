@@ -5,6 +5,7 @@
 
 #![cfg(feature = "native-ui")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use bytemuck::{Pod, Zeroable};
@@ -19,11 +20,12 @@ use super::vrm_loader::VrmModel;
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -48,6 +50,8 @@ pub struct Uniforms {
     pub light_col_2: [f32; 4],
     pub ambient: [f32; 4],
     pub base_color: [f32; 4],
+    /// x: 1.0 = sample texture, 0.0 = base_color only
+    pub use_texture: [f32; 4],
 }
 
 /// One draw call's GPU resources (vertex buffer, index buffer, uniform buffer).
@@ -60,6 +64,7 @@ struct DrawCall {
     num_indices: u32,
     num_vertices: u32,
     base_color: [f32; 4],
+    has_texture: bool,
 }
 
 /// Mutable offscreen state behind a Mutex for resize support.
@@ -95,6 +100,10 @@ pub struct VrmRenderer {
     // Light directions (normalized, in world space — pointing FROM light TO origin)
     lights: [LightInfo; 3],
     ambient: [f32; 4],
+    // GPU textures (kept alive for bind group references)
+    _textures: Vec<wgpu::Texture>,
+    // Global toggle: use textures vs white shading
+    use_textures: AtomicBool,
 }
 
 struct LightInfo {
@@ -130,20 +139,38 @@ impl VrmRenderer {
             source: wgpu::ShaderSource::Wgsl(shader_src.into()),
         });
 
-        // Scene bind group layout (uniform buffer)
+        // Scene bind group layout (uniform buffer + texture + sampler)
         let scene_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("vrm_scene_bgl"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
 
         let scene_pipeline_layout =
@@ -279,9 +306,14 @@ impl VrmRenderer {
             ],
         });
 
-        // Create draw calls for each primitive of each mesh
+        // Create 1x1 white fallback texture for primitives without a texture
+        let fallback_texture = create_rgba_texture(device, queue, &[255, 255, 255, 255], 1, 1, "vrm_fallback_tex");
+        let fallback_view = fallback_texture.create_view(&Default::default());
+
+        // Create GPU textures for each primitive and build draw calls
         let mut draw_calls = Vec::new();
         let mut prim_map = Vec::new();
+        let mut gpu_textures = vec![fallback_texture];
 
         for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
             for (prim_idx, prim) in mesh.primitives.iter().enumerate() {
@@ -293,9 +325,11 @@ impl VrmRenderer {
                     .positions
                     .iter()
                     .zip(prim.normals.iter())
-                    .map(|(p, n)| Vertex {
+                    .zip(prim.uvs.iter())
+                    .map(|((p, n), uv)| Vertex {
                         position: [p.x, p.y, p.z],
                         normal: [n.x, n.y, n.z],
+                        uv: *uv,
                     })
                     .collect();
 
@@ -322,13 +356,36 @@ impl VrmRenderer {
                     mapped_at_creation: false,
                 });
 
+                // Create or use fallback texture
+                let (tex_view, has_texture) = if let Some(ref tex) = prim.texture {
+                    let gpu_tex = create_rgba_texture(
+                        device, queue, &tex.pixels, tex.width, tex.height,
+                        &format!("vrm_tex_{}_{}", mesh_idx, prim_idx),
+                    );
+                    let view = gpu_tex.create_view(&Default::default());
+                    gpu_textures.push(gpu_tex);
+                    (view, true)
+                } else {
+                    (fallback_view.clone(), false)
+                };
+
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some(&format!("vrm_bg_{}_{}", mesh_idx, prim_idx)),
                     layout: &scene_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
-                    }],
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&tex_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
                 });
 
                 draw_calls.push(DrawCall {
@@ -339,6 +396,7 @@ impl VrmRenderer {
                     num_indices: prim.indices.len() as u32,
                     num_vertices: prim.positions.len() as u32,
                     base_color: prim.base_color,
+                    has_texture,
                 });
 
                 prim_map.push(PrimRef {
@@ -398,6 +456,8 @@ impl VrmRenderer {
             scene_bind_group_layout,
             lights,
             ambient: [0.15, 0.15, 0.18, 1.0],
+            _textures: gpu_textures,
+            use_textures: AtomicBool::new(true),
         }
     }
 
@@ -460,6 +520,11 @@ impl VrmRenderer {
         );
     }
 
+    /// Toggle texture rendering on/off (true = textured, false = white/lit only).
+    pub fn set_use_textures(&self, enabled: bool) {
+        self.use_textures.store(enabled, Ordering::Relaxed);
+    }
+
     /// Update vertex buffers with skinned positions and base normals.
     ///
     /// `skinned_meshes`: per-mesh Vec of per-primitive Vec of skinned positions.
@@ -482,13 +547,16 @@ impl VrmRenderer {
 
                 let positions = &skinned_meshes[mesh_idx][prim_idx];
                 let normals = &prim.normals;
+                let uvs = &prim.uvs;
 
                 let vertices: Vec<Vertex> = positions
                     .iter()
                     .zip(normals.iter())
-                    .map(|(p, n)| Vertex {
+                    .zip(uvs.iter())
+                    .map(|((p, n), uv)| Vertex {
                         position: [p.x, p.y, p.z],
                         normal: [n.x, n.y, n.z],
+                        uv: *uv,
                     })
                     .collect();
 
@@ -512,9 +580,11 @@ impl VrmRenderer {
             Mat4::IDENTITY
         };
         let mvp = state.projection_matrix * state.view_matrix * model_mat;
+        let use_tex = self.use_textures.load(Ordering::Relaxed);
 
         // Update all uniform buffers
         for dc in &self.draw_calls {
+            let tex_flag = if use_tex && dc.has_texture { 1.0f32 } else { 0.0 };
             let uniforms = Uniforms {
                 mvp: mvp.to_cols_array_2d(),
                 model: model_mat.to_cols_array_2d(),
@@ -526,6 +596,7 @@ impl VrmRenderer {
                 light_col_2: self.lights[2].color_intensity.to_array(),
                 ambient: self.ambient,
                 base_color: dc.base_color,
+                use_texture: [tex_flag, 0.0, 0.0, 0.0],
             };
             queue.write_buffer(&dc.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         }
@@ -631,6 +702,51 @@ fn create_depth_texture(
     });
     let view = texture.create_view(&Default::default());
     (texture, view)
+}
+
+/// Create a GPU texture from RGBA8 pixel data.
+fn create_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    label: &str,
+) -> wgpu::Texture {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
 }
 
 /// Convert euler angles (rx, ry, rz in radians) to a light direction vector.

@@ -15,18 +15,24 @@ struct Uniforms {
     ambient: vec4<f32>,
     // Material base color
     base_color: vec4<f32>,
+    // x: 1.0 = sample texture, 0.0 = use base_color only
+    use_texture: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var t_albedo: texture_2d<f32>;
+@group(0) @binding(2) var s_albedo: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
 };
 
 @vertex
@@ -35,6 +41,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_position = u.mvp * vec4<f32>(in.position, 1.0);
     // Transform normal by model matrix (ignoring non-uniform scale for now)
     out.world_normal = normalize((u.model * vec4<f32>(in.normal, 0.0)).xyz);
+    out.uv = in.uv;
     return out;
 }
 
@@ -53,7 +60,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     light += u.light_col_1.rgb * ndl1;
     light += u.light_col_2.rgb * ndl2;
 
-    var color = u.base_color.rgb * light;
+    // Material color: texture or flat base_color
+    var albedo = u.base_color;
+    if (u.use_texture.x > 0.5) {
+        albedo = textureSample(t_albedo, s_albedo, in.uv);
+    }
+
+    var color = albedo.rgb * light;
 
     // Simple Reinhard tone mapping
     color = color / (color + vec3<f32>(1.0));
@@ -61,7 +74,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Gamma correction
     color = pow(color, vec3<f32>(1.0 / 2.2));
 
-    return vec4<f32>(color, u.base_color.a);
+    return vec4<f32>(color, albedo.a);
 }
 
 // ── Blit shader: fullscreen textured quad ──

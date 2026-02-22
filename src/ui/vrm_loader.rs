@@ -87,6 +87,13 @@ pub struct MeshData {
     pub morph_deltas: Vec<Vec<Vec<Vec3>>>,
 }
 
+/// Decoded texture image (RGBA8).
+pub struct TextureImage {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Geometry for a single primitive.
 pub struct PrimitiveData {
     pub positions: Vec<Vec3>,
@@ -98,13 +105,17 @@ pub struct PrimitiveData {
     pub weights: Vec<[f32; 4]>,
     /// Base color factor from material (RGBA)
     pub base_color: [f32; 4],
+    /// Per-vertex UV coordinates (from TEXCOORD_0)
+    pub uvs: Vec<[f32; 2]>,
+    /// Decoded texture image (if material has a baseColorTexture)
+    pub texture: Option<TextureImage>,
 }
 
 impl VrmModel {
     /// Load a GLB file and extract all data needed for rendering.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let path = path.as_ref();
-        let (document, buffers, _images) =
+        let (document, buffers, images) =
             gltf::import(path).map_err(|e| format!("Failed to load GLB: {}", e))?;
 
         let buf = &buffers;
@@ -208,11 +219,28 @@ impl VrmModel {
                     .map(|iter| iter.into_f32().collect())
                     .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 0.0]; positions.len()]);
 
+                // UVs
+                let uvs: Vec<[f32; 2]> = reader
+                    .read_tex_coords(0)
+                    .map(|iter| iter.into_f32().collect())
+                    .unwrap_or_else(|| vec![[0.0; 2]; positions.len()]);
+
                 // Base color from material
-                let base_color = prim
-                    .material()
-                    .pbr_metallic_roughness()
-                    .base_color_factor();
+                let pbr = prim.material().pbr_metallic_roughness();
+                let base_color = pbr.base_color_factor();
+
+                // Texture image from material
+                let texture = pbr.base_color_texture().and_then(|tex_info| {
+                    let img_idx = tex_info.texture().source().index();
+                    images.get(img_idx).map(|img_data| {
+                        let pixels = convert_to_rgba8(img_data);
+                        TextureImage {
+                            pixels,
+                            width: img_data.width,
+                            height: img_data.height,
+                        }
+                    })
+                });
 
                 primitives.push(PrimitiveData {
                     positions,
@@ -221,6 +249,8 @@ impl VrmModel {
                     joints,
                     weights,
                     base_color,
+                    uvs,
+                    texture,
                 });
 
                 // Morph target deltas (only for Face mesh)
@@ -572,6 +602,32 @@ fn strip_morph_prefixes(names: Vec<String>) -> Vec<String> {
         .into_iter()
         .map(|n| n[prefix_len..].to_string())
         .collect()
+}
+
+/// Convert a glTF image to RGBA8 pixel data.
+fn convert_to_rgba8(img: &gltf::image::Data) -> Vec<u8> {
+    match img.format {
+        gltf::image::Format::R8G8B8A8 => img.pixels.clone(),
+        gltf::image::Format::R8G8B8 => img
+            .pixels
+            .chunks(3)
+            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+            .collect(),
+        gltf::image::Format::R8 => img
+            .pixels
+            .iter()
+            .flat_map(|&r| [r, r, r, 255])
+            .collect(),
+        gltf::image::Format::R8G8 => img
+            .pixels
+            .chunks(2)
+            .flat_map(|rg| [rg[0], rg[1], 0, 255])
+            .collect(),
+        _ => {
+            // Fallback: opaque white
+            vec![255u8; (img.width * img.height * 4) as usize]
+        }
+    }
 }
 
 /// Read morph target position deltas for a primitive.
