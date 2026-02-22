@@ -164,8 +164,7 @@ restart_delay_secs = 3
 
 [mediapipe]
 # Enable MediaPipe face tracking
-# Auto-enables if mediapipe Python package is installed and no other tracker is active
-enabled = false
+enabled = true
 # UDP port to receive MediaPipe tracker data on
 port = 12346
 # Listen address for UDP socket

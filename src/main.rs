@@ -58,10 +58,9 @@ struct Args {
     #[arg(short, long)]
     port: Option<u16>,
 
-    /// Launch native UI window
-    #[cfg(feature = "native-ui")]
+    /// Run in headless mode (no UI window)
     #[arg(long)]
-    ui: bool,
+    headless: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -103,9 +102,9 @@ fn main() -> anyhow::Result<()> {
         setup_and_spawn_services(&args).await
     })?;
 
-    // If UI requested, run eframe on the main thread (blocks until window closes)
+    // Launch UI unless headless mode was requested
     #[cfg(feature = "native-ui")]
-    if args.ui {
+    if !args.headless {
         info!("Launching native UI window");
         let ui_state = Arc::clone(&state);
 

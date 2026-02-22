@@ -607,7 +607,7 @@ pub struct MediaPipeConfig {
 impl Default for MediaPipeConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             port: 12346,
             listen_address: "127.0.0.1".to_string(),
             auto_launch: true,

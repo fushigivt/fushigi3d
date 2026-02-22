@@ -85,7 +85,7 @@ urlencoding = "2"
 tempfile = "3"
 
 [features]
-default = ["silero-vad"]
+default = ["silero-vad", "native-ui"]
 silero-vad = ["dep:voice_activity_detector"]
 native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer"]
 

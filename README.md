@@ -21,11 +21,11 @@ cd fushigi3d
 # Download a free VRM model and placeholder sprites
 ./scripts/setup.sh
 
-# Build and run with 3D viewport
-cargo run --release --features native-ui
+# Build and run (opens 3D viewport by default)
+cargo run --release
 
-# Or build headless (browser source / OBS only)
-cargo build --release
+# Or run headless (browser source / OBS only)
+cargo run --release -- --headless
 ```
 
 ## Usage
