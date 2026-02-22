@@ -31,7 +31,7 @@ enum ViewMode {
 }
 
 /// The native egui application window.
-pub struct RustuberApp {
+pub struct Fushigi3dApp {
     state: Arc<AppState>,
     /// Broadcast receiver for avatar state updates (sync-safe via try_recv)
     state_rx: tokio::sync::broadcast::Receiver<AvatarState>,
@@ -93,7 +93,7 @@ pub struct RustuberApp {
     show_controls: bool,
 }
 
-impl RustuberApp {
+impl Fushigi3dApp {
     pub fn new(cc: &eframe::CreationContext<'_>, state: Arc<AppState>) -> Self {
         let state_rx = state.subscribe_state();
         let start_time = Instant::now();
@@ -265,14 +265,14 @@ impl RustuberApp {
     pub fn run(state: Arc<AppState>) -> eframe::Result {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_title("rustuber")
+                .with_title("fushigi3d")
                 .with_inner_size([800.0, 600.0])
                 .with_transparent(true),
             ..Default::default()
         };
 
         eframe::run_native(
-            "rustuber",
+            "fushigi3d",
             options,
             Box::new(move |cc| Ok(Box::new(Self::new(cc, state)))),
         )
@@ -493,7 +493,7 @@ impl RustuberApp {
     }
 }
 
-impl eframe::App for RustuberApp {
+impl eframe::App for Fushigi3dApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Apply catppuccin theme
         catppuccin_egui::set_theme(ctx, self.theme);
@@ -525,7 +525,7 @@ impl eframe::App for RustuberApp {
         if self.show_controls {
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.label("rustuber");
+                ui.label("fushigi3d");
                 ui.separator();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.small("Tab: toggle options");

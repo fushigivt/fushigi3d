@@ -4,7 +4,7 @@
 //! a simple energy-based detector.
 
 use crate::config::{VadConfig, VadProvider};
-use crate::error::RustuberError;
+use crate::error::Fushigi3dError;
 #[cfg(feature = "silero-vad")]
 use crate::error::AudioError;
 use std::time::{Duration, Instant};
@@ -72,7 +72,7 @@ struct SileroVad {
 
 #[cfg(feature = "silero-vad")]
 impl SileroVad {
-    fn new(config: &VadConfig) -> Result<Self, RustuberError> {
+    fn new(config: &VadConfig) -> Result<Self, Fushigi3dError> {
         let detector = voice_activity_detector::VoiceActivityDetector::builder()
             .sample_rate(16000)
             .chunk_size(512usize)
@@ -204,7 +204,7 @@ pub struct VadProcessor {
 
 impl VadProcessor {
     /// Create a new VAD processor
-    pub fn new(config: &VadConfig) -> Result<Self, RustuberError> {
+    pub fn new(config: &VadConfig) -> Result<Self, Fushigi3dError> {
         let (inner, active_provider) = match config.provider {
             VadProvider::Silero => {
                 #[cfg(feature = "silero-vad")]
@@ -260,7 +260,7 @@ impl VadProcessor {
     }
 
     /// Process audio samples and return voice activity
-    pub fn process(&mut self, samples: &[f32]) -> Result<VoiceActivity, RustuberError> {
+    pub fn process(&mut self, samples: &[f32]) -> Result<VoiceActivity, Fushigi3dError> {
         let (raw_is_speech, confidence, energy_db) = match &mut self.inner {
             VadInner::Energy(vad) => vad.process(samples),
             #[cfg(feature = "silero-vad")]

@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 
 use crate::avatar::AvatarState;
 use crate::config::MediaPipeConfig;
-use crate::error::{RustuberError, TrackingError};
+use crate::error::{Fushigi3dError, TrackingError};
 use crate::tracking::vmc;
 
 /// A single JSON packet from the MediaPipe tracker
@@ -107,7 +107,7 @@ impl MpReceiver {
     }
 
     /// Bind the UDP socket and start receiving
-    pub fn start(&mut self) -> Result<(), RustuberError> {
+    pub fn start(&mut self) -> Result<(), Fushigi3dError> {
         let addr = format!("{}:{}", self.config.listen_address, self.config.port);
 
         let socket = UdpSocket::bind(&addr).map_err(|e| {
@@ -129,7 +129,7 @@ impl MpReceiver {
     }
 
     /// Process incoming JSON packets (non-blocking)
-    pub async fn process(&self) -> Result<Option<MpData>, RustuberError> {
+    pub async fn process(&self) -> Result<Option<MpData>, Fushigi3dError> {
         let socket = match &self.socket {
             Some(s) => s,
             None => return Ok(None),

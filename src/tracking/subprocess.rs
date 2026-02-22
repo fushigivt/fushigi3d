@@ -6,7 +6,7 @@
 use tokio::process::{Child, Command};
 
 use crate::config::{MediaPipeConfig, OsfConfig};
-use crate::error::{RustuberError, TrackingError};
+use crate::error::{Fushigi3dError, TrackingError};
 
 /// Manages an OpenSeeFace facetracker subprocess
 pub struct OsfSubprocess {
@@ -29,7 +29,7 @@ impl OsfSubprocess {
     ///        --capture <camera_device> --model-dir <model_quality>
     ///        --max-faces <max_faces> --width <capture_width> --height <capture_height>
     ///        --fps <capture_fps>`
-    pub fn start(&mut self) -> Result<(), RustuberError> {
+    pub fn start(&mut self) -> Result<(), Fushigi3dError> {
         if self.is_running() {
             return Ok(());
         }
@@ -113,7 +113,7 @@ impl MpSubprocess {
     }
 
     /// Launch the MediaPipe tracker subprocess.
-    pub fn start(&mut self) -> Result<(), RustuberError> {
+    pub fn start(&mut self) -> Result<(), Fushigi3dError> {
         if self.is_running() {
             return Ok(());
         }

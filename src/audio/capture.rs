@@ -16,7 +16,7 @@ use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolat
 use std::thread;
 
 use crate::config::AudioConfig;
-use crate::error::{AudioError, RustuberError};
+use crate::error::{AudioError, Fushigi3dError};
 
 /// Target sample rate for the downstream VAD pipeline (Silero expects 16 kHz).
 const TARGET_RATE: u32 = 16000;
@@ -35,7 +35,7 @@ pub struct AudioCapture {
 
 impl AudioCapture {
     /// Create a new audio capture from configuration.
-    pub fn new(config: &AudioConfig) -> Result<Self, RustuberError> {
+    pub fn new(config: &AudioConfig) -> Result<Self, Fushigi3dError> {
         let device_name = if config.device == "default" {
             "default".to_string()
         } else {
@@ -146,7 +146,7 @@ impl AudioCapture {
     }
 
     /// Get the next batch of audio samples (non-blocking).
-    pub async fn get_samples(&self) -> Result<Vec<f32>, RustuberError> {
+    pub async fn get_samples(&self) -> Result<Vec<f32>, Fushigi3dError> {
         match self.sample_rx.try_recv() {
             Ok(samples) => Ok(samples),
             Err(crossbeam_channel::TryRecvError::Empty) => {

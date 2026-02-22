@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::config::VmcConfig;
-use crate::error::{TrackingError, RustuberError};
+use crate::error::{TrackingError, Fushigi3dError};
 
 /// VMC data received from face tracking software
 #[derive(Debug, Clone, Default)]
@@ -58,7 +58,7 @@ impl VmcReceiver {
     }
 
     /// Start receiving VMC data
-    pub fn start(&mut self) -> Result<(), RustuberError> {
+    pub fn start(&mut self) -> Result<(), Fushigi3dError> {
         let addr = format!("0.0.0.0:{}", self.config.receiver_port);
 
         let socket = UdpSocket::bind(&addr)
@@ -81,7 +81,7 @@ impl VmcReceiver {
     }
 
     /// Process incoming VMC packets (non-blocking)
-    pub async fn process(&self) -> Result<Option<VmcData>, RustuberError> {
+    pub async fn process(&self) -> Result<Option<VmcData>, Fushigi3dError> {
         let socket = match &self.socket {
             Some(s) => s,
             None => return Ok(None),
@@ -112,7 +112,7 @@ impl VmcReceiver {
     fn handle_packet<'a>(
         &'a self,
         packet: OscPacket,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), RustuberError>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Fushigi3dError>> + Send + 'a>> {
         Box::pin(async move {
             match packet {
                 OscPacket::Message(msg) => {
@@ -129,7 +129,7 @@ impl VmcReceiver {
     }
 
     /// Handle an OSC message
-    async fn handle_message(&self, msg: OscMessage) -> Result<(), RustuberError> {
+    async fn handle_message(&self, msg: OscMessage) -> Result<(), Fushigi3dError> {
         let mut data = self.data.write().await;
         data.has_data = true;
 

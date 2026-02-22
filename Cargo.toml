@@ -1,9 +1,9 @@
 [package]
-name = "rustuber"
+name = "fushigi3d"
 version = "0.1.0"
 edition = "2021"
 description = "Headless VTuber/PNGTuber service for Linux"
-authors = ["Rustuber Contributors"]
+authors = ["Fushigi3D Contributors"]
 license = "GPL-3.0-only"
 repository = "https://github.com/fushigivt/fushigi3d"
 

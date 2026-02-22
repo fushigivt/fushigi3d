@@ -1,4 +1,4 @@
-# Rustuber
+# Fushigi3D
 
 A headless VTuber/PNGTuber service for Linux written in Rust.
 
@@ -32,19 +32,19 @@ cargo build --release
 
 ```bash
 # List available audio devices
-rustuber --list-devices
+fushigi3d --list-devices
 
 # Run with specific audio device
-rustuber --device "hw:1,0"
+fushigi3d --device "hw:1,0"
 
 # Run with custom config file
-rustuber --config path/to/config.toml
+fushigi3d --config path/to/config.toml
 
 # Run with verbose logging
-rustuber --verbose
+fushigi3d --verbose
 
 # Disable specific features
-rustuber --no-obs --no-http
+fushigi3d --no-obs --no-http
 ```
 
 ## Configuration

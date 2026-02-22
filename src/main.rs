@@ -1,4 +1,4 @@
-//! Rustuber - Headless VTuber/PNGTuber Service
+//! Fushigi3D - Headless VTuber/PNGTuber Service
 //!
 //! Main entry point for the CLI application.
 
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use rustuber::{
+use fushigi3d::{
     audio::AudioPipeline,
     config::Config,
     output::{browser::BrowserServer, obs::ObsClient},
@@ -22,9 +22,9 @@ use rustuber::{
     AppState,
 };
 
-/// Rustuber - Headless VTuber/PNGTuber Service for Linux
+/// Fushigi3D - Headless VTuber/PNGTuber Service for Linux
 #[derive(Parser, Debug)]
-#[command(name = "rustuber", version, about, long_about = None)]
+#[command(name = "fushigi3d", version, about, long_about = None)]
 struct Args {
     /// Configuration file path
     #[arg(short, long)]
@@ -85,8 +85,8 @@ fn main() -> anyhow::Result<()> {
 
     info!(
         "Starting {} v{}",
-        rustuber::NAME,
-        rustuber::VERSION
+        fushigi3d::NAME,
+        fushigi3d::VERSION
     );
 
     // Handle list-devices mode
@@ -114,7 +114,7 @@ fn main() -> anyhow::Result<()> {
         let _guard = runtime.enter();
 
         // eframe::run_native blocks the main thread (winit requirement)
-        if let Err(e) = rustuber::ui::RustuberApp::run(ui_state) {
+        if let Err(e) = fushigi3d::ui::Fushigi3dApp::run(ui_state) {
             error!("UI error: {}", e);
         }
 
@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     });
 
-    info!("Rustuber stopped");
+    info!("Fushigi3D stopped");
     Ok(())
 }
 

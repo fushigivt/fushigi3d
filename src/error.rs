@@ -1,10 +1,10 @@
-//! Error types for Rustuber
+//! Error types for Fushigi3D
 
 use thiserror::Error;
 
-/// Main error type for Rustuber
+/// Main error type for Fushigi3D
 #[derive(Error, Debug)]
-pub enum RustuberError {
+pub enum Fushigi3dError {
     #[error("Audio error: {0}")]
     Audio(#[from] AudioError),
 
@@ -178,5 +178,5 @@ pub enum TrackingError {
     MpSubprocess(String),
 }
 
-/// Result type alias for Rustuber operations
-pub type Result<T> = std::result::Result<T, RustuberError>;
+/// Result type alias for Fushigi3D operations
+pub type Result<T> = std::result::Result<T, Fushigi3dError>;

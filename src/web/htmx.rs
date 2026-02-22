@@ -24,7 +24,7 @@ pub async fn index_page(State(state): State<Arc<AppState>>) -> Html<String> {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rustuber Dashboard</title>
+    <title>Fushigi3D Dashboard</title>
     <script src="/static/htmx.min.js"></script>
     <script src="/static/sse.js"></script>
     <link rel="stylesheet" href="/static/style.css">
@@ -32,7 +32,7 @@ pub async fn index_page(State(state): State<Arc<AppState>>) -> Html<String> {
 <body>
     <div class="dashboard">
         <header class="header">
-            <h1>Rustuber</h1>
+            <h1>Fushigi3D</h1>
             <span class="version">v{version}</span>
         </header>
 
@@ -114,14 +114,14 @@ pub async fn settings_page(State(state): State<Arc<AppState>>) -> Html<String> {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings - Rustuber</title>
+    <title>Settings - Fushigi3D</title>
     <script src="/static/htmx.min.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="dashboard">
         <header class="header">
-            <h1>Rustuber Settings</h1>
+            <h1>Fushigi3D Settings</h1>
         </header>
 
         <nav class="nav">
@@ -210,7 +210,7 @@ pub async fn obs_settings_page(State(state): State<Arc<AppState>>) -> Html<Strin
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OBS Settings - Rustuber</title>
+    <title>OBS Settings - Fushigi3D</title>
     <script src="/static/htmx.min.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -390,7 +390,7 @@ pub async fn preview_page(State(_state): State<Arc<AppState>>) -> Html<String> {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Preview - Rustuber</title>
+    <title>Preview - Fushigi3D</title>
     <script src="/static/htmx.min.js"></script>
     <script src="/static/sse.js"></script>
     <style>

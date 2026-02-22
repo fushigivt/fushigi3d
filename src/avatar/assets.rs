@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::AvatarConfig;
-use crate::error::{AvatarError, RustuberError};
+use crate::error::{AvatarError, Fushigi3dError};
 
 /// Manages avatar assets (images)
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub struct AssetManager {
 
 impl AssetManager {
     /// Create a new asset manager from configuration
-    pub fn new(config: &AvatarConfig) -> Result<Self, RustuberError> {
+    pub fn new(config: &AvatarConfig) -> Result<Self, Fushigi3dError> {
         let base_dir = if config.assets_dir.is_absolute() {
             config.assets_dir.clone()
         } else {
@@ -44,7 +44,7 @@ impl AssetManager {
     }
 
     /// Scan the assets directory and cache available assets
-    fn scan_assets(&mut self) -> Result<(), RustuberError> {
+    fn scan_assets(&mut self) -> Result<(), Fushigi3dError> {
         if !self.base_dir.exists() {
             tracing::warn!(
                 "Assets directory does not exist: {}",
@@ -121,7 +121,7 @@ impl AssetManager {
     }
 
     /// Add or update an asset
-    pub fn add_asset(&mut self, key: &str, path: PathBuf) -> Result<(), RustuberError> {
+    pub fn add_asset(&mut self, key: &str, path: PathBuf) -> Result<(), Fushigi3dError> {
         if !path.exists() {
             return Err(AvatarError::AssetNotFound(path.display().to_string()).into());
         }
@@ -135,13 +135,13 @@ impl AssetManager {
     }
 
     /// Reload assets from disk
-    pub fn reload(&mut self) -> Result<(), RustuberError> {
+    pub fn reload(&mut self) -> Result<(), Fushigi3dError> {
         self.assets.clear();
         self.scan_assets()
     }
 
     /// Get asset data (read file contents)
-    pub fn get_data(&self, key: &str) -> Result<Vec<u8>, RustuberError> {
+    pub fn get_data(&self, key: &str) -> Result<Vec<u8>, Fushigi3dError> {
         let path = self
             .get_path(key)
             .ok_or_else(|| AvatarError::AssetNotFound(key.to_string()))?;

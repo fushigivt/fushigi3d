@@ -7,7 +7,7 @@ use tokio::time::sleep;
 
 use crate::avatar::AvatarState;
 use crate::config::{ObsConfig, ObsMode};
-use crate::error::{OutputError, RustuberError};
+use crate::error::{OutputError, Fushigi3dError};
 
 /// OBS WebSocket client for controlling scenes/sources
 pub struct ObsClient {
@@ -27,7 +27,7 @@ impl ObsClient {
     }
 
     /// Connect to OBS WebSocket server
-    pub async fn connect(&mut self) -> Result<(), RustuberError> {
+    pub async fn connect(&mut self) -> Result<(), Fushigi3dError> {
         let addr = format!("{}:{}", self.config.host, self.config.port);
         tracing::info!("Connecting to OBS at {}", addr);
 
@@ -62,7 +62,7 @@ impl ObsClient {
     }
 
     /// Update OBS based on avatar state
-    pub async fn update_state(&mut self, state: &AvatarState) -> Result<(), RustuberError> {
+    pub async fn update_state(&mut self, state: &AvatarState) -> Result<(), Fushigi3dError> {
         let client = self
             .client
             .as_ref()
@@ -95,7 +95,7 @@ impl ObsClient {
     }
 
     /// Switch to a scene based on state
-    async fn switch_scene(&self, client: &Client, state: &str) -> Result<(), RustuberError> {
+    async fn switch_scene(&self, client: &Client, state: &str) -> Result<(), Fushigi3dError> {
         let scene_name = match state {
             "speaking" => self
                 .config
@@ -121,7 +121,7 @@ impl ObsClient {
     }
 
     /// Toggle source visibility based on state
-    async fn toggle_sources(&self, client: &Client, state: &str) -> Result<(), RustuberError> {
+    async fn toggle_sources(&self, client: &Client, state: &str) -> Result<(), Fushigi3dError> {
         let scene = self
             .config
             .scene
@@ -162,7 +162,7 @@ impl ObsClient {
         scene: &str,
         source: &str,
         visible: bool,
-    ) -> Result<(), RustuberError> {
+    ) -> Result<(), Fushigi3dError> {
         // Get scene item ID
         let item_id = client
             .scene_items()
@@ -189,7 +189,7 @@ impl ObsClient {
     }
 
     /// Get list of available scenes
-    pub async fn list_scenes(&self) -> Result<Vec<String>, RustuberError> {
+    pub async fn list_scenes(&self) -> Result<Vec<String>, Fushigi3dError> {
         let client = self
             .client
             .as_ref()
@@ -206,7 +206,7 @@ impl ObsClient {
     }
 
     /// Get list of sources in a scene
-    pub async fn list_sources(&self, scene: &str) -> Result<Vec<String>, RustuberError> {
+    pub async fn list_sources(&self, scene: &str) -> Result<Vec<String>, Fushigi3dError> {
         let client = self
             .client
             .as_ref()
@@ -222,7 +222,7 @@ impl ObsClient {
     }
 
     /// Attempt to reconnect to OBS with retry
-    pub async fn reconnect_with_retry(&mut self) -> Result<(), RustuberError> {
+    pub async fn reconnect_with_retry(&mut self) -> Result<(), Fushigi3dError> {
         let max_retries = 5;
         let mut retry_count = 0;
 

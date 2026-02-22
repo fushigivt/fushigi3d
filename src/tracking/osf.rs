@@ -29,7 +29,7 @@ use tokio::sync::RwLock;
 
 use crate::avatar::AvatarState;
 use crate::config::OsfConfig;
-use crate::error::{TrackingError, RustuberError};
+use crate::error::{TrackingError, Fushigi3dError};
 
 /// Size of a single face frame in bytes
 pub const FRAME_SIZE: usize = 1785;
@@ -302,7 +302,7 @@ impl OsfReceiver {
     }
 
     /// Start receiving OSF data
-    pub fn start(&mut self) -> Result<(), RustuberError> {
+    pub fn start(&mut self) -> Result<(), Fushigi3dError> {
         let addr = format!("{}:{}", self.config.listen_address, self.config.port);
 
         let socket = UdpSocket::bind(&addr)
@@ -326,7 +326,7 @@ impl OsfReceiver {
     ///
     /// Packets may contain multiple faces (N×1785 bytes).
     /// Selects the face matching `config.face_id`.
-    pub async fn process(&self) -> Result<Option<OsfData>, RustuberError> {
+    pub async fn process(&self) -> Result<Option<OsfData>, Fushigi3dError> {
         let socket = match &self.socket {
             Some(s) => s,
             None => return Ok(None),

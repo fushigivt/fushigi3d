@@ -37,7 +37,7 @@ impl Default for Config {
 
 impl Config {
     /// Load configuration from a TOML file
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, RustuberError> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Fushigi3dError> {
         let contents = std::fs::read_to_string(path.as_ref()).map_err(|e| {
             ConfigError::ReadFile(format!("{}: {}", path.as_ref().display(), e))
         })?;
@@ -46,12 +46,12 @@ impl Config {
     }
 
     /// Parse configuration from a TOML string
-    pub fn from_str(s: &str) -> Result<Self, RustuberError> {
+    pub fn from_str(s: &str) -> Result<Self, Fushigi3dError> {
         toml::from_str(s).map_err(|e| ConfigError::Parse(e.to_string()).into())
     }
 
     /// Load configuration from default paths
-    pub fn load() -> Result<Self, RustuberError> {
+    pub fn load() -> Result<Self, Fushigi3dError> {
         // Try config paths in order
         let paths = [
             PathBuf::from("config.toml"),
@@ -71,7 +71,7 @@ impl Config {
     }
 
     /// Validate the configuration
-    pub fn validate(&self) -> Result<(), RustuberError> {
+    pub fn validate(&self) -> Result<(), Fushigi3dError> {
         // Validate audio settings
         if self.audio.sample_rate == 0 {
             return Err(ConfigError::InvalidValue {
@@ -631,24 +631,24 @@ fn dirs_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
         if let Some(config_dir) = std::env::var_os("XDG_CONFIG_HOME") {
-            return PathBuf::from(config_dir).join("rustuber");
+            return PathBuf::from(config_dir).join("fushigi3d");
         }
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".config/rustuber");
+            return PathBuf::from(home).join(".config/fushigi3d");
         }
     }
 
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join("Library/Application Support/rustuber");
+            return PathBuf::from(home).join("Library/Application Support/fushigi3d");
         }
     }
 
     #[cfg(target_os = "windows")]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            return PathBuf::from(appdata).join("rustuber");
+            return PathBuf::from(appdata).join("fushigi3d");
         }
     }
 

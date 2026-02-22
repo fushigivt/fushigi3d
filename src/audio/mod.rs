@@ -6,7 +6,7 @@ pub mod capture;
 pub mod vad;
 
 use crate::config::{AudioConfig, VadConfig};
-use crate::error::RustuberError;
+use crate::error::Fushigi3dError;
 
 pub use capture::AudioCapture;
 pub use vad::{VadProcessor, VoiceActivity};
@@ -19,7 +19,7 @@ pub struct AudioPipeline {
 
 impl AudioPipeline {
     /// Create a new audio pipeline
-    pub fn new(audio_config: &AudioConfig, vad_config: &VadConfig) -> Result<Self, RustuberError> {
+    pub fn new(audio_config: &AudioConfig, vad_config: &VadConfig) -> Result<Self, Fushigi3dError> {
         let capture = AudioCapture::new(audio_config)?;
         let vad = VadProcessor::new(vad_config)?;
 
@@ -27,7 +27,7 @@ impl AudioPipeline {
     }
 
     /// Process one frame of audio and return speaking state
-    pub async fn process(&mut self) -> Result<bool, RustuberError> {
+    pub async fn process(&mut self) -> Result<bool, Fushigi3dError> {
         // Get audio samples from capture
         let samples = self.capture.get_samples().await?;
 

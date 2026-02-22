@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MediaPipe Face & Pose Landmarker → JSON-over-UDP tracker for Rustuber.
+"""MediaPipe Face & Pose Landmarker → JSON-over-UDP tracker for Fushigi3D.
 
 Captures webcam frames, runs MediaPipe Face Landmarker to extract ARKit-compatible
 blendshapes and head pose, and optionally runs Pose Landmarker for body tracking.
@@ -79,7 +79,7 @@ def rotation_matrix_to_euler(mat: np.ndarray) -> list[float]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="MediaPipe face tracker for Rustuber")
+    parser = argparse.ArgumentParser(description="MediaPipe face tracker for Fushigi3D")
     parser.add_argument("--ip", default="127.0.0.1", help="UDP destination address")
     parser.add_argument("--port", type=int, default=12346, help="UDP destination port")
     parser.add_argument("--capture", type=int, default=0, help="Camera device index")
