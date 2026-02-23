@@ -55,6 +55,9 @@ gltf = { version = "1", optional = true, features = ["extras"] }
 glam = { version = "0.29", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 
+# Native file dialog (optional, used with native-ui)
+rfd = { version = "0.15", optional = true }
+
 # Theming (optional, used with native-ui)
 catppuccin-egui = { version = "5.5", optional = true, default-features = false, features = ["egui31"] }
 
@@ -87,7 +90,7 @@ tempfile = "3"
 [features]
 default = ["silero-vad", "native-ui"]
 silero-vad = ["dep:voice_activity_detector"]
-native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer"]
+native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer", "rfd"]
 
 [profile.release]
 lto = true

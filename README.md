@@ -5,7 +5,7 @@ VTuber/PNGTuber UI or headless service for Linux.
 ## Features
 
 - **Few Dependencies**: Standalone PNGTuber, MediaPipe for 3d model.
-- **Voice Activity Detection**: Multiple VAD backends (energy-based, Silero, WebRTC)
+- **Voice Activity Detection**: Multiple VAD backends (energy-based, Silero)
 - **OBS Integration**: WebSocket-based scene/source switching
 - **Browser Source**: Self-contained avatar page for OBS browser sources
 - **Web Dashboard**: Real-time configuration and preview
@@ -20,7 +20,7 @@ cd fushigi3d
 # Download free VRM models and placeholder sprites
 ./scripts/setup.sh
 
-# install mediapipe and opencv
+# install mediapipe and opencv 
 pip install mediapipe opencv-python
 
 # Build and run (opens 3D viewport by default)

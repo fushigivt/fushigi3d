@@ -1,7 +1,7 @@
 //! Main egui application with VRM 3D viewport and 2D PNGTuber mode.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -93,6 +93,8 @@ pub struct Fushigi3dApp {
     textured: bool,
     /// Whether the controls side panel is visible
     show_controls: bool,
+    /// Overlay mode: frameless, transparent, always-on-top, mouse passthrough
+    overlay_mode: bool,
     /// Available VRM/GLB models: (display_name, path)
     available_models: Vec<(String, String)>,
     /// Currently selected model display name
@@ -180,6 +182,7 @@ impl Fushigi3dApp {
             spring_collider_scale: 1.3,
             textured: true,
             show_controls: true,
+            overlay_mode: false,
             available_models,
             selected_model,
             wgpu_device: None,
@@ -343,6 +346,55 @@ impl Fushigi3dApp {
         models
     }
 
+    /// Import a VRM/GLB file: copy to models dir, rescan, and load it.
+    fn import_vrm_file(&mut self, src: &PathBuf) {
+        let models_dir = Path::new("assets/default/models");
+        if !models_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(models_dir) {
+                self.load_error = Some(format!("Failed to create models dir: {}", e));
+                return;
+            }
+        }
+
+        let file_name = match src.file_name() {
+            Some(n) => n.to_string_lossy().to_string(),
+            None => {
+                self.load_error = Some("Invalid file path".to_string());
+                return;
+            }
+        };
+
+        let dest = models_dir.join(&file_name);
+
+        // Canonicalize both paths to avoid copying a file onto itself
+        // (e.g. absolute drag path vs relative models dir path)
+        let src_canon = std::fs::canonicalize(src).ok();
+        let dest_canon = std::fs::canonicalize(&dest).ok();
+        let same_file = match (&src_canon, &dest_canon) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        };
+
+        if !same_file {
+            if let Err(e) = std::fs::copy(src, &dest) {
+                self.load_error = Some(format!("Failed to copy '{}': {}", file_name, e));
+                return;
+            }
+        }
+
+        // Rescan available models
+        self.available_models = Self::scan_models();
+
+        // Select and load the imported model
+        let stem = dest
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.selected_model = stem;
+        let path_str = dest.to_string_lossy().to_string();
+        self.load_model_from_path(&path_str);
+    }
+
     /// Launch the native UI window. Blocks until the window is closed.
     pub fn run(state: Arc<AppState>) -> eframe::Result {
         let options = eframe::NativeOptions {
@@ -470,7 +522,7 @@ impl Fushigi3dApp {
         renderer.set_camera_distance(self.camera_distance);
         renderer.set_mirrored(self.mirrored);
         renderer.set_use_textures(self.textured);
-        renderer.set_transparent_bg(!self.show_controls);
+        renderer.set_transparent_bg(self.overlay_mode);
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -584,6 +636,22 @@ impl eframe::App for Fushigi3dApp {
         // Drain latest state from broadcast channel
         self.update_cached_state();
 
+        // Handle drag-and-drop VRM/GLB import
+        let dropped: Vec<_> = ctx.input(|i| i.raw.dropped_files.clone());
+        for file in dropped {
+            if let Some(path) = &file.path {
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext == "vrm" || ext == "glb" {
+                    let path = path.clone();
+                    self.import_vrm_file(&path);
+                }
+            }
+        }
+
         // Only update skinning in 3D mode
         if self.view_mode == ViewMode::Vrm3D {
             if let Some(render_state) = frame.wgpu_render_state() {
@@ -591,13 +659,33 @@ impl eframe::App for Fushigi3dApp {
             }
         }
 
-        // Toggle controls panel with Tab
-        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+        // Toggle controls panel with Tab (consume so egui doesn't use it for focus navigation)
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
             self.show_controls = !self.show_controls;
         }
 
-        // When controls are hidden, make the entire background transparent
-        if !self.show_controls {
+        // Toggle overlay mode with T (consume to prevent widget focus stealing)
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::T)) {
+            self.overlay_mode = !self.overlay_mode;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!self.overlay_mode));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                if self.overlay_mode {
+                    egui::WindowLevel::AlwaysOnTop
+                } else {
+                    egui::WindowLevel::Normal
+                },
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(self.overlay_mode));
+            // Auto-hide controls when entering overlay, restore when exiting
+            if self.overlay_mode {
+                self.show_controls = false;
+            } else {
+                self.show_controls = true;
+            }
+        }
+
+        // In overlay mode, make the entire background transparent
+        if self.overlay_mode {
             let mut visuals = ctx.style().visuals.clone();
             visuals.panel_fill = egui::Color32::TRANSPARENT;
             visuals.window_fill = egui::Color32::TRANSPARENT;
@@ -610,7 +698,7 @@ impl eframe::App for Fushigi3dApp {
                 ui.label("fushigi3d");
                 ui.separator();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.small("Tab: toggle options");
+                    ui.small("Tab: options | T: overlay | Drag VRM to import");
                 });
             });
         });
@@ -629,8 +717,8 @@ impl eframe::App for Fushigi3dApp {
             });
 
             // Model picker
+            ui.label("Model");
             if !self.available_models.is_empty() {
-                ui.label("Model");
                 let prev_model = self.selected_model.clone();
                 egui::ComboBox::from_id_salt("model_picker")
                     .selected_text(&self.selected_model)
@@ -647,8 +735,16 @@ impl eframe::App for Fushigi3dApp {
                         self.load_model_from_path(&path);
                     }
                 }
-                ui.separator();
             }
+            if ui.button("Import VRM...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("VRM/GLB", &["vrm", "glb"])
+                    .pick_file()
+                {
+                    self.import_vrm_file(&path);
+                }
+            }
+            ui.separator();
 
             if self.view_mode == ViewMode::Vrm3D {
                 ui.horizontal(|ui| {
