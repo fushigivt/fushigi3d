@@ -228,7 +228,15 @@ impl Fushigi3dApp {
         };
 
         let model_path = config.avatar.vrm.model_path.clone();
-        self.load_model_from_path(&model_path);
+        if Path::new(&model_path).exists() {
+            self.load_model_from_path(&model_path);
+        } else if let Some((name, path)) = self.available_models.first() {
+            tracing::warn!("Configured model not found: {model_path}, falling back to {name}");
+            self.selected_model = name.clone();
+            self.load_model_from_path(&path.clone());
+        } else {
+            self.load_error = Some(format!("No VRM/GLB models found. Run scripts/setup.sh or place models in assets/default/models/"));
+        }
     }
 
     /// Load a VRM/GLB model from the given path, replacing the current model.

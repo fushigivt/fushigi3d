@@ -53,7 +53,7 @@ angry = "expressions/angry.png"
 # VRM 3D model configuration
 [avatar.vrm]
 # Path to the VRM/GLB model file
-model_path = "assets/default/models/long-hair.vrm"
+model_path = "assets/default/models/Constraint_Twist_Sample.vrm"
 
 # Tracking smoothing and sensitivity tuning
 [avatar.tracking]
