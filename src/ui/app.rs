@@ -32,6 +32,81 @@ enum ViewMode {
     PngTuber2D,
 }
 
+const STORAGE_KEY: &str = "fushigi3d_ui_state";
+
+/// Persisted UI state saved/restored by eframe's built-in persistence.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct PersistedState {
+    camera_distance: f32,
+    mirrored: bool,
+    textured: bool,
+    show_controls: bool,
+    overlay_mode: bool,
+    head_only: bool,
+    spring_bones_enabled: bool,
+    spring_gravity: f32,
+    spring_collider_scale: f32,
+    theme_name: String,
+    view_mode_name: String,
+    selected_model: String,
+    tuning: crate::config::TrackingTuning,
+    selected_device: String,
+    selected_vad: crate::config::VadProvider,
+}
+
+impl Default for PersistedState {
+    fn default() -> Self {
+        Self {
+            camera_distance: 0.88,
+            mirrored: true,
+            textured: true,
+            show_controls: true,
+            overlay_mode: false,
+            head_only: true,
+            spring_bones_enabled: true,
+            spring_gravity: 1.0,
+            spring_collider_scale: 1.3,
+            theme_name: "latte".to_string(),
+            view_mode_name: "vrm3d".to_string(),
+            selected_model: String::new(),
+            tuning: crate::config::TrackingTuning::default(),
+            selected_device: "default".to_string(),
+            selected_vad: crate::config::VadProvider::default(),
+        }
+    }
+}
+
+fn theme_to_name(theme: &catppuccin_egui::Theme) -> &'static str {
+    if *theme == catppuccin_egui::FRAPPE { "frappe" }
+    else if *theme == catppuccin_egui::MACCHIATO { "macchiato" }
+    else if *theme == catppuccin_egui::MOCHA { "mocha" }
+    else { "latte" }
+}
+
+fn theme_from_name(name: &str) -> catppuccin_egui::Theme {
+    match name {
+        "frappe" => catppuccin_egui::FRAPPE,
+        "macchiato" => catppuccin_egui::MACCHIATO,
+        "mocha" => catppuccin_egui::MOCHA,
+        _ => catppuccin_egui::LATTE,
+    }
+}
+
+fn view_mode_to_name(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::Vrm3D => "vrm3d",
+        ViewMode::PngTuber2D => "pngtuber2d",
+    }
+}
+
+fn view_mode_from_name(name: &str) -> ViewMode {
+    match name {
+        "pngtuber2d" => ViewMode::PngTuber2D,
+        _ => ViewMode::Vrm3D,
+    }
+}
+
 /// The native egui application window.
 pub struct Fushigi3dApp {
     state: Arc<AppState>,
@@ -135,27 +210,50 @@ impl Fushigi3dApp {
         };
 
         let audio_devices = crate::audio::capture::list_input_devices();
-        let selected_device = config.audio.device.clone();
-
-        let tuning = config.avatar.tracking.clone();
-        let mode = SmoothingMode::from_str(&tuning.smoothing_mode);
-        let smoother = TrackingSmoother::new(mode, &tuning);
-
-        let selected_vad = config.vad.provider;
 
         let available_models = Self::scan_models();
 
-        // Derive initial selected model name from config path
-        let selected_model = Path::new(&config.avatar.vrm.model_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
+        // Try loading persisted UI state from eframe storage
+        let persisted: PersistedState = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, STORAGE_KEY))
             .unwrap_or_default();
+        let has_persisted = cc
+            .storage
+            .and_then(|s| s.get_string(STORAGE_KEY))
+            .is_some();
+
+        // If persisted state exists, use it; otherwise fall back to TOML config
+        let (tuning, selected_device, selected_vad, selected_model) = if has_persisted {
+            tracing::info!("Restored UI state from eframe persistence");
+            (
+                persisted.tuning.clone(),
+                persisted.selected_device.clone(),
+                persisted.selected_vad,
+                persisted.selected_model.clone(),
+            )
+        } else {
+            tracing::info!("No persisted UI state, using TOML config / defaults");
+            let model_name = Path::new(&config.avatar.vrm.model_path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            (
+                config.avatar.tracking.clone(),
+                config.audio.device.clone(),
+                config.vad.provider,
+                model_name,
+            )
+        };
+
+        let mode = SmoothingMode::from_str(&tuning.smoothing_mode);
+        let smoother = TrackingSmoother::new(mode, &tuning);
 
         let mut app = Self {
             state,
             state_rx,
             cached_avatar: AvatarState::default(),
-            view_mode: ViewMode::Vrm3D,
+            view_mode: view_mode_from_name(&persisted.view_mode_name),
             asset_manager,
             png_textures: HashMap::new(),
             model: None,
@@ -163,7 +261,7 @@ impl Fushigi3dApp {
             mapper: None,
             start_time,
             load_error: None,
-            theme: catppuccin_egui::LATTE,
+            theme: theme_from_name(&persisted.theme_name),
             audio_devices,
             selected_device,
             smoother,
@@ -171,18 +269,18 @@ impl Fushigi3dApp {
             tuning,
             last_frame: Instant::now(),
             selected_vad,
-            camera_distance: 0.88,
-            head_only: true,
+            camera_distance: persisted.camera_distance,
+            head_only: persisted.head_only,
             head_override: false,
             head_override_rot: [0.0; 3],
-            mirrored: true,
+            mirrored: persisted.mirrored,
             spring_sim: None,
-            spring_bones_enabled: true,
-            spring_gravity: 1.0,
-            spring_collider_scale: 1.3,
-            textured: true,
-            show_controls: true,
-            overlay_mode: false,
+            spring_bones_enabled: persisted.spring_bones_enabled,
+            spring_gravity: persisted.spring_gravity,
+            spring_collider_scale: persisted.spring_collider_scale,
+            textured: persisted.textured,
+            show_controls: persisted.show_controls,
+            overlay_mode: false, // never persist overlay mode (confusing if starts transparent)
             available_models,
             selected_model,
             wgpu_device: None,
@@ -215,30 +313,36 @@ impl Fushigi3dApp {
         self.wgpu_queue = Some(Arc::new(render_state.queue.clone()));
         self.wgpu_format = render_state.target_format;
 
-        // Load model from config path
-        let config = {
-            let rt = tokio::runtime::Handle::try_current();
-            match rt {
-                Ok(handle) => {
-                    tokio::task::block_in_place(|| {
-                        handle.block_on(self.state.config.read()).clone()
-                    })
-                }
-                Err(_) => {
-                    crate::config::Config::default()
-                }
-            }
-        };
+        // Try persisted model name first, then config path, then first available
+        let persisted_path = self
+            .available_models
+            .iter()
+            .find(|(name, _)| name == &self.selected_model)
+            .map(|(_, path)| path.clone());
 
-        let model_path = config.avatar.vrm.model_path.clone();
-        if Path::new(&model_path).exists() {
-            self.load_model_from_path(&model_path);
-        } else if let Some((name, path)) = self.available_models.first() {
-            tracing::warn!("Configured model not found: {model_path}, falling back to {name}");
-            self.selected_model = name.clone();
-            self.load_model_from_path(&path.clone());
+        if let Some(path) = persisted_path {
+            self.load_model_from_path(&path);
         } else {
-            self.load_error = Some(format!("No VRM/GLB models found. Run scripts/setup.sh or place models in assets/default/models/"));
+            let config = {
+                let rt = tokio::runtime::Handle::try_current();
+                match rt {
+                    Ok(handle) => tokio::task::block_in_place(|| {
+                        handle.block_on(self.state.config.read()).clone()
+                    }),
+                    Err(_) => crate::config::Config::default(),
+                }
+            };
+
+            let model_path = config.avatar.vrm.model_path.clone();
+            if Path::new(&model_path).exists() {
+                self.load_model_from_path(&model_path);
+            } else if let Some((name, path)) = self.available_models.first() {
+                tracing::warn!("Configured model not found: {model_path}, falling back to {name}");
+                self.selected_model = name.clone();
+                self.load_model_from_path(&path.clone());
+            } else {
+                self.load_error = Some(format!("No VRM/GLB models found. Run scripts/setup.sh or place models in assets/default/models/"));
+            }
         }
     }
 
@@ -628,6 +732,27 @@ impl Fushigi3dApp {
 }
 
 impl eframe::App for Fushigi3dApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let persisted = PersistedState {
+            camera_distance: self.camera_distance,
+            mirrored: self.mirrored,
+            textured: self.textured,
+            show_controls: self.show_controls,
+            overlay_mode: self.overlay_mode,
+            head_only: self.head_only,
+            spring_bones_enabled: self.spring_bones_enabled,
+            spring_gravity: self.spring_gravity,
+            spring_collider_scale: self.spring_collider_scale,
+            theme_name: theme_to_name(&self.theme).to_string(),
+            view_mode_name: view_mode_to_name(self.view_mode).to_string(),
+            selected_model: self.selected_model.clone(),
+            tuning: self.tuning.clone(),
+            selected_device: self.selected_device.clone(),
+            selected_vad: self.selected_vad,
+        };
+        eframe::set_value(storage, STORAGE_KEY, &persisted);
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Apply catppuccin theme
         catppuccin_egui::set_theme(ctx, self.theme);
@@ -1028,6 +1153,24 @@ impl eframe::App for Fushigi3dApp {
             if self.view_mode == ViewMode::PngTuber2D {
                 ui.separator();
                 ui.label(format!("Sprite: {}", self.cached_avatar.asset_key()));
+            }
+
+            ui.separator();
+            if ui.button("Reset to defaults").clicked() {
+                let defaults = PersistedState::default();
+                self.camera_distance = defaults.camera_distance;
+                self.mirrored = defaults.mirrored;
+                self.textured = defaults.textured;
+                self.show_controls = defaults.show_controls;
+                self.head_only = defaults.head_only;
+                self.spring_bones_enabled = defaults.spring_bones_enabled;
+                self.spring_gravity = defaults.spring_gravity;
+                self.spring_collider_scale = defaults.spring_collider_scale;
+                self.theme = theme_from_name(&defaults.theme_name);
+                self.view_mode = view_mode_from_name(&defaults.view_mode_name);
+                self.tuning = defaults.tuning;
+                let mode = SmoothingMode::from_str(&self.tuning.smoothing_mode);
+                self.smoother.set_mode(mode, &self.tuning);
             }
 
             if let Some(ref err) = self.load_error {
