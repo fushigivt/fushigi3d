@@ -20,6 +20,9 @@ cd fushigi3d
 # Download free VRM models and placeholder sprites
 ./scripts/setup.sh
 
+# install mediapipe and opencv
+pip install mediapipe opencv-python
+
 # Build and run (opens 3D viewport by default)
 cargo run --release
 
@@ -86,17 +89,6 @@ http://localhost:8080/avatar
 
 The avatar will update in real-time based on voice activity.
 
-### VMC Face Tracking
-
-```toml
-[vmc]
-receiver_enabled = true
-receiver_port = 39539
-blend_with_vad = true
-```
-
-Configure OpenSeeFace or VSeeFace to send data to `127.0.0.1:39539`.
-
 ## Avatar Assets
 
 Place your avatar images in the `assets/default/` directory:
@@ -111,7 +103,7 @@ assets/default/
     └── surprised.png
 ```
 
-## Web Dashboard
+## Web Dashboard (partially implemented)
 
 Access the dashboard at `http://localhost:8080/`:
 
@@ -119,7 +111,7 @@ Access the dashboard at `http://localhost:8080/`:
 - **Settings**: Configure audio, OBS, VMC, and integrations
 - **Browser Source**: Direct link for OBS (`/avatar`)
 
-## API Endpoints
+## API Endpoints (partially implemented)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
