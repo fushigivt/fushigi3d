@@ -1,0 +1,9 @@
+[package]
+name = "fushigi3d-fx"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = "24"
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.29"
