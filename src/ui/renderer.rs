@@ -12,6 +12,8 @@ use bytemuck::{Pod, Zeroable};
 use eframe::wgpu;
 use glam::{Mat4, Vec3, Vec4};
 
+use fushigi3d_fx::PostProcessChain;
+
 use super::vrm_loader::VrmModel;
 
 /// Vertex layout matching the shader.
@@ -73,6 +75,9 @@ struct OffscreenState {
     offscreen_view: wgpu::TextureView,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    /// Final output texture (post-processing result). Blit reads from this.
+    final_texture: wgpu::Texture,
+    final_view: wgpu::TextureView,
     blit_bind_group: wgpu::BindGroup,
     offscreen_size: [u32; 2],
     projection_matrix: Mat4,
@@ -106,6 +111,8 @@ pub struct VrmRenderer {
     use_textures: AtomicBool,
     // Transparent background mode
     transparent_bg: AtomicBool,
+    // Post-processing chain
+    fx_chain: Mutex<PostProcessChain>,
 }
 
 struct LightInfo {
@@ -182,8 +189,8 @@ impl VrmRenderer {
                 push_constant_ranges: &[],
             });
 
-        // Scene render pipeline (offscreen, Rgba8UnormSrgb)
-        let offscreen_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        // Scene render pipeline (offscreen HDR for post-processing chain)
+        let offscreen_format = wgpu::TextureFormat::Rgba16Float;
         let scene_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("vrm_scene_pipeline"),
             layout: Some(&scene_pipeline_layout),
@@ -286,6 +293,23 @@ impl VrmRenderer {
             create_color_texture(device, width, height, offscreen_format);
         let (depth_texture, depth_view) = create_depth_texture(device, width, height);
 
+        // Create final output texture + post-processing chain
+        let (final_texture, final_view) =
+            create_color_texture(device, width, height, fushigi3d_fx::HDR_FORMAT);
+
+        let fx_chain = {
+            let mut chain = PostProcessChain::new(device, width, height);
+            // Effects order: outline → bloom → vignette → color_grading → chromatic_ab → film_grain → tonemapping (last)
+            chain.push(Box::new(fushigi3d_fx::effects::outline::Outline::new(device, fushigi3d_fx::HDR_FORMAT)));
+            chain.push(Box::new(fushigi3d_fx::effects::bloom::Bloom::new(device, fushigi3d_fx::HDR_FORMAT, width, height)));
+            chain.push(Box::new(fushigi3d_fx::effects::vignette::Vignette::new(device, fushigi3d_fx::HDR_FORMAT)));
+            chain.push(Box::new(fushigi3d_fx::effects::color_grading::ColorGrading::new(device, fushigi3d_fx::HDR_FORMAT)));
+            chain.push(Box::new(fushigi3d_fx::effects::chromatic_ab::ChromaticAb::new(device, fushigi3d_fx::HDR_FORMAT)));
+            chain.push(Box::new(fushigi3d_fx::effects::film_grain::FilmGrain::new(device, fushigi3d_fx::HDR_FORMAT)));
+            chain.push(Box::new(fushigi3d_fx::effects::tonemapping::Tonemapping::new(device, fushigi3d_fx::HDR_FORMAT)));
+            chain
+        };
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("vrm_sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -293,13 +317,14 @@ impl VrmRenderer {
             ..Default::default()
         });
 
+        // Blit reads from chain output (final_view)
         let blit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vrm_blit_bg"),
             layout: &blit_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&offscreen_view),
+                    resource: wgpu::BindingResource::TextureView(&final_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -447,6 +472,8 @@ impl VrmRenderer {
                 offscreen_view,
                 depth_texture,
                 depth_view,
+                final_texture,
+                final_view,
                 blit_bind_group,
                 offscreen_size: [width, height],
                 projection_matrix,
@@ -461,6 +488,7 @@ impl VrmRenderer {
             _textures: gpu_textures,
             use_textures: AtomicBool::new(true),
             transparent_bg: AtomicBool::new(false),
+            fx_chain: Mutex::new(fx_chain),
         }
     }
 
@@ -477,7 +505,7 @@ impl VrmRenderer {
         }
         state.offscreen_size = [width, height];
 
-        let offscreen_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let offscreen_format = wgpu::TextureFormat::Rgba16Float;
         let (tex, view) = create_color_texture(device, width, height, offscreen_format);
         state.offscreen_texture = tex;
         state.offscreen_view = view;
@@ -486,14 +514,21 @@ impl VrmRenderer {
         state.depth_texture = dtex;
         state.depth_view = dview;
 
-        // Recreate blit bind group with new texture view
+        // Resize post-processing chain and final texture
+        let (ftex, fview) = create_color_texture(device, width, height, fushigi3d_fx::HDR_FORMAT);
+        state.final_texture = ftex;
+        state.final_view = fview;
+        let mut chain = self.fx_chain.lock().unwrap();
+        chain.resize(device, width, height);
+
+        // Recreate blit bind group with new final view
         state.blit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vrm_blit_bg"),
             layout: &self.blit_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&state.offscreen_view),
+                    resource: wgpu::BindingResource::TextureView(&state.final_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -531,6 +566,11 @@ impl VrmRenderer {
     /// Toggle transparent background (for OBS window capture with alpha).
     pub fn set_transparent_bg(&self, enabled: bool) {
         self.transparent_bg.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Access the post-processing chain for effect parameter adjustments.
+    pub fn fx_chain(&self) -> std::sync::MutexGuard<'_, PostProcessChain> {
+        self.fx_chain.lock().unwrap()
     }
 
     /// Update vertex buffers with skinned positions and base normals.
@@ -650,6 +690,36 @@ impl VrmRenderer {
             }
         }
 
+        // Run post-processing chain: scene HDR → final LDR
+        {
+            let mut chain = self.fx_chain.lock().unwrap();
+            chain.set_params(queue);
+            if chain.has_enabled_effects() {
+                chain.run(device, &mut encoder, &state.offscreen_view, &state.final_view);
+            } else {
+                // No effects: copy scene to final so blit has valid data
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &state.offscreen_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &state.final_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: state.offscreen_size[0],
+                        height: state.offscreen_size[1],
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+
         // Drop lock before submit
         drop(state);
         queue.submit(std::iter::once(encoder.finish()));
@@ -705,7 +775,7 @@ fn create_depth_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());

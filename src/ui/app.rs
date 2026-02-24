@@ -34,6 +34,63 @@ enum ViewMode {
 
 const STORAGE_KEY: &str = "fushigi3d_ui_state";
 
+/// Persisted post-processing effect parameters.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct FxParams {
+    tonemap_mode: u32, // 0=Reinhard, 1=ACES
+    tonemap_exposure: f32,
+    outline_enabled: bool,
+    outline_thickness: f32,
+    outline_threshold: f32,
+    outline_strength: f32,
+    bloom_enabled: bool,
+    bloom_threshold: f32,
+    bloom_intensity: f32,
+    vignette_enabled: bool,
+    vignette_intensity: f32,
+    vignette_radius: f32,
+    vignette_softness: f32,
+    color_grading_enabled: bool,
+    cg_brightness: f32,
+    cg_contrast: f32,
+    cg_saturation: f32,
+    cg_hue_shift: f32,
+    chromatic_ab_enabled: bool,
+    chromatic_ab_intensity: f32,
+    film_grain_enabled: bool,
+    film_grain_intensity: f32,
+}
+
+impl Default for FxParams {
+    fn default() -> Self {
+        Self {
+            tonemap_mode: 1, // ACES
+            tonemap_exposure: 1.0,
+            outline_enabled: false,
+            outline_thickness: 1.0,
+            outline_threshold: 0.01,
+            outline_strength: 1.0,
+            bloom_enabled: false,
+            bloom_threshold: 0.8,
+            bloom_intensity: 0.3,
+            vignette_enabled: false,
+            vignette_intensity: 0.5,
+            vignette_radius: 0.4,
+            vignette_softness: 0.3,
+            color_grading_enabled: false,
+            cg_brightness: 1.0,
+            cg_contrast: 1.0,
+            cg_saturation: 1.0,
+            cg_hue_shift: 0.0,
+            chromatic_ab_enabled: false,
+            chromatic_ab_intensity: 0.005,
+            film_grain_enabled: false,
+            film_grain_intensity: 0.05,
+        }
+    }
+}
+
 /// Persisted UI state saved/restored by eframe's built-in persistence.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -53,6 +110,8 @@ struct PersistedState {
     tuning: crate::config::TrackingTuning,
     selected_device: String,
     selected_vad: crate::config::VadProvider,
+    #[serde(default)]
+    fx: FxParams,
 }
 
 impl Default for PersistedState {
@@ -73,6 +132,7 @@ impl Default for PersistedState {
             tuning: crate::config::TrackingTuning::default(),
             selected_device: "default".to_string(),
             selected_vad: crate::config::VadProvider::default(),
+            fx: FxParams::default(),
         }
     }
 }
@@ -180,6 +240,8 @@ pub struct Fushigi3dApp {
     wgpu_queue: Option<Arc<wgpu::Queue>>,
     /// Stored wgpu texture format for model reloading
     wgpu_format: wgpu::TextureFormat,
+    /// Post-processing effect parameters (editable via UI)
+    fx: FxParams,
 }
 
 impl Fushigi3dApp {
@@ -286,6 +348,7 @@ impl Fushigi3dApp {
             wgpu_device: None,
             wgpu_queue: None,
             wgpu_format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            fx: persisted.fx.clone(),
         };
 
         // Try to load VRM model and initialize renderer
@@ -627,6 +690,56 @@ impl Fushigi3dApp {
         renderer.set_mirrored(self.mirrored);
         renderer.set_use_textures(self.textured);
         renderer.set_transparent_bg(self.overlay_mode);
+
+        // Sync FX params to the post-processing chain
+        {
+            use fushigi3d_fx::effects::{tonemapping, outline, bloom, vignette, color_grading, chromatic_ab, film_grain};
+            let mut chain = renderer.fx_chain();
+            let effects = chain.effects_mut();
+            // Order matches chain construction: outline, bloom, vignette, color_grading, chromatic_ab, film_grain, tonemapping
+            if let Some(o) = effects.get_mut(0).and_then(|e| e.as_any_mut().downcast_mut::<outline::Outline>()) {
+                o.enabled = self.fx.outline_enabled;
+                o.thickness = self.fx.outline_thickness;
+                o.threshold = self.fx.outline_threshold;
+                o.strength = self.fx.outline_strength;
+            }
+            if let Some(b) = effects.get_mut(1).and_then(|e| e.as_any_mut().downcast_mut::<bloom::Bloom>()) {
+                b.enabled = self.fx.bloom_enabled;
+                b.threshold = self.fx.bloom_threshold;
+                b.intensity = self.fx.bloom_intensity;
+            }
+            if let Some(v) = effects.get_mut(2).and_then(|e| e.as_any_mut().downcast_mut::<vignette::Vignette>()) {
+                v.enabled = self.fx.vignette_enabled;
+                v.intensity = self.fx.vignette_intensity;
+                v.radius = self.fx.vignette_radius;
+                v.softness = self.fx.vignette_softness;
+            }
+            if let Some(cg) = effects.get_mut(3).and_then(|e| e.as_any_mut().downcast_mut::<color_grading::ColorGrading>()) {
+                cg.enabled = self.fx.color_grading_enabled;
+                cg.brightness = self.fx.cg_brightness;
+                cg.contrast = self.fx.cg_contrast;
+                cg.saturation = self.fx.cg_saturation;
+                cg.hue_shift = self.fx.cg_hue_shift;
+            }
+            if let Some(ca) = effects.get_mut(4).and_then(|e| e.as_any_mut().downcast_mut::<chromatic_ab::ChromaticAb>()) {
+                ca.enabled = self.fx.chromatic_ab_enabled;
+                ca.intensity = self.fx.chromatic_ab_intensity;
+            }
+            if let Some(fg) = effects.get_mut(5).and_then(|e| e.as_any_mut().downcast_mut::<film_grain::FilmGrain>()) {
+                fg.enabled = self.fx.film_grain_enabled;
+                fg.intensity = self.fx.film_grain_intensity;
+                fg.time = self.start_time.elapsed().as_secs_f32();
+            }
+            if let Some(tm) = effects.get_mut(6).and_then(|e| e.as_any_mut().downcast_mut::<tonemapping::Tonemapping>()) {
+                tm.enabled = true; // always on
+                tm.mode = if self.fx.tonemap_mode == 0 {
+                    tonemapping::TonemapMode::Reinhard
+                } else {
+                    tonemapping::TonemapMode::Aces
+                };
+                tm.exposure = self.fx.tonemap_exposure;
+            }
+        }
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -749,6 +862,7 @@ impl eframe::App for Fushigi3dApp {
             tuning: self.tuning.clone(),
             selected_device: self.selected_device.clone(),
             selected_vad: self.selected_vad,
+            fx: self.fx.clone(),
         };
         eframe::set_value(storage, STORAGE_KEY, &persisted);
     }
@@ -1149,6 +1263,70 @@ impl eframe::App for Fushigi3dApp {
                 _ => {}
             }
 
+            // Post-processing effects controls
+            if self.view_mode == ViewMode::Vrm3D {
+                ui.separator();
+                ui.heading("Effects");
+
+                // Tonemapping (always on)
+                ui.horizontal(|ui| {
+                    ui.label("Tonemap:");
+                    if ui.selectable_label(self.fx.tonemap_mode == 0, "Reinhard").clicked() {
+                        self.fx.tonemap_mode = 0;
+                    }
+                    if ui.selectable_label(self.fx.tonemap_mode == 1, "ACES").clicked() {
+                        self.fx.tonemap_mode = 1;
+                    }
+                });
+                ui.add(egui::Slider::new(&mut self.fx.tonemap_exposure, 0.1..=3.0).text("Exposure"));
+
+                ui.separator();
+
+                // Outline
+                ui.checkbox(&mut self.fx.outline_enabled, "Outline");
+                if self.fx.outline_enabled {
+                    ui.add(egui::Slider::new(&mut self.fx.outline_thickness, 0.5..=3.0).text("Thickness"));
+                    ui.add(egui::Slider::new(&mut self.fx.outline_threshold, 0.001..=0.1).logarithmic(true).text("Threshold"));
+                    ui.add(egui::Slider::new(&mut self.fx.outline_strength, 0.0..=2.0).text("Strength"));
+                }
+
+                // Bloom
+                ui.checkbox(&mut self.fx.bloom_enabled, "Bloom");
+                if self.fx.bloom_enabled {
+                    ui.add(egui::Slider::new(&mut self.fx.bloom_threshold, 0.0..=2.0).text("Threshold"));
+                    ui.add(egui::Slider::new(&mut self.fx.bloom_intensity, 0.0..=1.0).text("Intensity"));
+                }
+
+                // Vignette
+                ui.checkbox(&mut self.fx.vignette_enabled, "Vignette");
+                if self.fx.vignette_enabled {
+                    ui.add(egui::Slider::new(&mut self.fx.vignette_intensity, 0.0..=1.0).text("Intensity"));
+                    ui.add(egui::Slider::new(&mut self.fx.vignette_radius, 0.1..=0.8).text("Radius"));
+                    ui.add(egui::Slider::new(&mut self.fx.vignette_softness, 0.1..=0.8).text("Softness"));
+                }
+
+                // Color Grading
+                ui.checkbox(&mut self.fx.color_grading_enabled, "Color Grading");
+                if self.fx.color_grading_enabled {
+                    ui.add(egui::Slider::new(&mut self.fx.cg_brightness, 0.5..=2.0).text("Brightness"));
+                    ui.add(egui::Slider::new(&mut self.fx.cg_contrast, 0.5..=2.0).text("Contrast"));
+                    ui.add(egui::Slider::new(&mut self.fx.cg_saturation, 0.0..=2.0).text("Saturation"));
+                    ui.add(egui::Slider::new(&mut self.fx.cg_hue_shift, -3.14..=3.14).text("Hue shift"));
+                }
+
+                // Chromatic Aberration
+                ui.checkbox(&mut self.fx.chromatic_ab_enabled, "Chromatic Aberration");
+                if self.fx.chromatic_ab_enabled {
+                    ui.add(egui::Slider::new(&mut self.fx.chromatic_ab_intensity, 0.0..=0.02).text("Intensity"));
+                }
+
+                // Film Grain
+                ui.checkbox(&mut self.fx.film_grain_enabled, "Film Grain");
+                if self.fx.film_grain_enabled {
+                    ui.add(egui::Slider::new(&mut self.fx.film_grain_intensity, 0.0..=0.2).text("Intensity"));
+                }
+            }
+
             // In 2D mode, show the current asset key
             if self.view_mode == ViewMode::PngTuber2D {
                 ui.separator();
@@ -1171,6 +1349,7 @@ impl eframe::App for Fushigi3dApp {
                 self.tuning = defaults.tuning;
                 let mode = SmoothingMode::from_str(&self.tuning.smoothing_mode);
                 self.smoother.set_mode(mode, &self.tuning);
+                self.fx = FxParams::default();
             }
 
             if let Some(ref err) = self.load_error {

@@ -66,14 +66,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         albedo = textureSample(t_albedo, s_albedo, in.uv);
     }
 
-    var color = albedo.rgb * light;
+    let color = albedo.rgb * light;
 
-    // Simple Reinhard tone mapping
-    color = color / (color + vec3<f32>(1.0));
-
-    // Gamma correction
-    color = pow(color, vec3<f32>(1.0 / 2.2));
-
+    // HDR output — tonemapping is handled by the post-processing chain
     return vec4<f32>(color, albedo.a);
 }
 
