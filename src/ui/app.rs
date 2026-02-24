@@ -32,6 +32,13 @@ enum ViewMode {
     PngTuber2D,
 }
 
+/// Tab selection for the controls side panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlsTab {
+    General,
+    Effects,
+}
+
 const STORAGE_KEY: &str = "fushigi3d_ui_state";
 
 /// Persisted post-processing effect parameters.
@@ -242,6 +249,8 @@ pub struct Fushigi3dApp {
     wgpu_format: wgpu::TextureFormat,
     /// Post-processing effect parameters (editable via UI)
     fx: FxParams,
+    /// Active tab in the controls side panel
+    controls_tab: ControlsTab,
 }
 
 impl Fushigi3dApp {
@@ -349,6 +358,7 @@ impl Fushigi3dApp {
             wgpu_queue: None,
             wgpu_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             fx: persisted.fx.clone(),
+            controls_tab: ControlsTab::General,
         };
 
         // Try to load VRM model and initialize renderer
@@ -945,9 +955,21 @@ impl eframe::App for Fushigi3dApp {
 
         if self.show_controls {
         egui::SidePanel::left("controls").show(ctx, |ui| {
-            ui.heading("Controls");
+            // Tab selector (Effects tab only available in 3D mode)
+            if self.view_mode != ViewMode::Vrm3D && self.controls_tab == ControlsTab::Effects {
+                self.controls_tab = ControlsTab::General;
+            }
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.controls_tab, ControlsTab::General, "General");
+                if self.view_mode == ViewMode::Vrm3D {
+                    ui.selectable_value(&mut self.controls_tab, ControlsTab::Effects, "Effects");
+                }
+            });
             ui.separator();
 
+            egui::ScrollArea::vertical().show(ui, |ui| {
+            match self.controls_tab {
+            ControlsTab::General => {
             // View mode toggle
             ui.horizontal(|ui| {
                 ui.label("Mode:");
@@ -1263,70 +1285,6 @@ impl eframe::App for Fushigi3dApp {
                 _ => {}
             }
 
-            // Post-processing effects controls
-            if self.view_mode == ViewMode::Vrm3D {
-                ui.separator();
-                ui.heading("Effects");
-
-                // Tonemapping (always on)
-                ui.horizontal(|ui| {
-                    ui.label("Tonemap:");
-                    if ui.selectable_label(self.fx.tonemap_mode == 0, "Reinhard").clicked() {
-                        self.fx.tonemap_mode = 0;
-                    }
-                    if ui.selectable_label(self.fx.tonemap_mode == 1, "ACES").clicked() {
-                        self.fx.tonemap_mode = 1;
-                    }
-                });
-                ui.add(egui::Slider::new(&mut self.fx.tonemap_exposure, 0.1..=3.0).text("Exposure"));
-
-                ui.separator();
-
-                // Outline
-                ui.checkbox(&mut self.fx.outline_enabled, "Outline");
-                if self.fx.outline_enabled {
-                    ui.add(egui::Slider::new(&mut self.fx.outline_thickness, 0.5..=3.0).text("Thickness"));
-                    ui.add(egui::Slider::new(&mut self.fx.outline_threshold, 0.001..=0.1).logarithmic(true).text("Threshold"));
-                    ui.add(egui::Slider::new(&mut self.fx.outline_strength, 0.0..=2.0).text("Strength"));
-                }
-
-                // Bloom
-                ui.checkbox(&mut self.fx.bloom_enabled, "Bloom");
-                if self.fx.bloom_enabled {
-                    ui.add(egui::Slider::new(&mut self.fx.bloom_threshold, 0.0..=2.0).text("Threshold"));
-                    ui.add(egui::Slider::new(&mut self.fx.bloom_intensity, 0.0..=1.0).text("Intensity"));
-                }
-
-                // Vignette
-                ui.checkbox(&mut self.fx.vignette_enabled, "Vignette");
-                if self.fx.vignette_enabled {
-                    ui.add(egui::Slider::new(&mut self.fx.vignette_intensity, 0.0..=1.0).text("Intensity"));
-                    ui.add(egui::Slider::new(&mut self.fx.vignette_radius, 0.1..=0.8).text("Radius"));
-                    ui.add(egui::Slider::new(&mut self.fx.vignette_softness, 0.1..=0.8).text("Softness"));
-                }
-
-                // Color Grading
-                ui.checkbox(&mut self.fx.color_grading_enabled, "Color Grading");
-                if self.fx.color_grading_enabled {
-                    ui.add(egui::Slider::new(&mut self.fx.cg_brightness, 0.5..=2.0).text("Brightness"));
-                    ui.add(egui::Slider::new(&mut self.fx.cg_contrast, 0.5..=2.0).text("Contrast"));
-                    ui.add(egui::Slider::new(&mut self.fx.cg_saturation, 0.0..=2.0).text("Saturation"));
-                    ui.add(egui::Slider::new(&mut self.fx.cg_hue_shift, -3.14..=3.14).text("Hue shift"));
-                }
-
-                // Chromatic Aberration
-                ui.checkbox(&mut self.fx.chromatic_ab_enabled, "Chromatic Aberration");
-                if self.fx.chromatic_ab_enabled {
-                    ui.add(egui::Slider::new(&mut self.fx.chromatic_ab_intensity, 0.0..=0.02).text("Intensity"));
-                }
-
-                // Film Grain
-                ui.checkbox(&mut self.fx.film_grain_enabled, "Film Grain");
-                if self.fx.film_grain_enabled {
-                    ui.add(egui::Slider::new(&mut self.fx.film_grain_intensity, 0.0..=0.2).text("Intensity"));
-                }
-            }
-
             // In 2D mode, show the current asset key
             if self.view_mode == ViewMode::PngTuber2D {
                 ui.separator();
@@ -1351,11 +1309,90 @@ impl eframe::App for Fushigi3dApp {
                 self.smoother.set_mode(mode, &self.tuning);
                 self.fx = FxParams::default();
             }
+            } // end General tab
+
+            ControlsTab::Effects => {
+            // Tonemapping (always on)
+            ui.heading("Tonemapping");
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                if ui.selectable_label(self.fx.tonemap_mode == 0, "Reinhard").clicked() {
+                    self.fx.tonemap_mode = 0;
+                }
+                if ui.selectable_label(self.fx.tonemap_mode == 1, "ACES").clicked() {
+                    self.fx.tonemap_mode = 1;
+                }
+            });
+            ui.add(egui::Slider::new(&mut self.fx.tonemap_exposure, 0.1..=3.0).text("Exposure"));
+
+            ui.separator();
+
+            // Outline
+            ui.checkbox(&mut self.fx.outline_enabled, "Outline");
+            if self.fx.outline_enabled {
+                ui.add(egui::Slider::new(&mut self.fx.outline_thickness, 0.5..=3.0).text("Thickness"));
+                ui.add(egui::Slider::new(&mut self.fx.outline_threshold, 0.001..=0.1).logarithmic(true).text("Threshold"));
+                ui.add(egui::Slider::new(&mut self.fx.outline_strength, 0.0..=2.0).text("Strength"));
+            }
+
+            ui.separator();
+
+            // Bloom
+            ui.checkbox(&mut self.fx.bloom_enabled, "Bloom");
+            if self.fx.bloom_enabled {
+                ui.add(egui::Slider::new(&mut self.fx.bloom_threshold, 0.0..=2.0).text("Threshold"));
+                ui.add(egui::Slider::new(&mut self.fx.bloom_intensity, 0.0..=1.0).text("Intensity"));
+            }
+
+            ui.separator();
+
+            // Vignette
+            ui.checkbox(&mut self.fx.vignette_enabled, "Vignette");
+            if self.fx.vignette_enabled {
+                ui.add(egui::Slider::new(&mut self.fx.vignette_intensity, 0.0..=1.0).text("Intensity"));
+                ui.add(egui::Slider::new(&mut self.fx.vignette_radius, 0.1..=0.8).text("Radius"));
+                ui.add(egui::Slider::new(&mut self.fx.vignette_softness, 0.1..=0.8).text("Softness"));
+            }
+
+            ui.separator();
+
+            // Color Grading
+            ui.checkbox(&mut self.fx.color_grading_enabled, "Color Grading");
+            if self.fx.color_grading_enabled {
+                ui.add(egui::Slider::new(&mut self.fx.cg_brightness, 0.5..=2.0).text("Brightness"));
+                ui.add(egui::Slider::new(&mut self.fx.cg_contrast, 0.5..=2.0).text("Contrast"));
+                ui.add(egui::Slider::new(&mut self.fx.cg_saturation, 0.0..=2.0).text("Saturation"));
+                ui.add(egui::Slider::new(&mut self.fx.cg_hue_shift, -3.14..=3.14).text("Hue shift"));
+            }
+
+            ui.separator();
+
+            // Chromatic Aberration
+            ui.checkbox(&mut self.fx.chromatic_ab_enabled, "Chromatic Aberration");
+            if self.fx.chromatic_ab_enabled {
+                ui.add(egui::Slider::new(&mut self.fx.chromatic_ab_intensity, 0.0..=0.02).text("Intensity"));
+            }
+
+            ui.separator();
+
+            // Film Grain
+            ui.checkbox(&mut self.fx.film_grain_enabled, "Film Grain");
+            if self.fx.film_grain_enabled {
+                ui.add(egui::Slider::new(&mut self.fx.film_grain_intensity, 0.0..=0.2).text("Intensity"));
+            }
+
+            ui.separator();
+            if ui.button("Reset effects").clicked() {
+                self.fx = FxParams::default();
+            }
+            } // end Effects tab
+            } // end match
 
             if let Some(ref err) = self.load_error {
                 ui.separator();
                 ui.colored_label(theme.red, err);
             }
+            }); // end ScrollArea
         });
         } // end show_controls
 
