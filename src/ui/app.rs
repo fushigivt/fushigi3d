@@ -286,6 +286,28 @@ pub struct Fushigi3dApp {
 
 impl Fushigi3dApp {
     pub fn new(cc: &eframe::CreationContext<'_>, state: Arc<AppState>) -> Self {
+        // Load bundled fonts (Roboto: Apache-2.0, Roboto Mono: OFL-1.1)
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "Roboto".to_owned(),
+            egui::FontData::from_static(include_bytes!("../../fonts/Roboto-Regular.ttf")).into(),
+        );
+        fonts.font_data.insert(
+            "RobotoMono".to_owned(),
+            egui::FontData::from_static(include_bytes!("../../fonts/RobotoMono-Regular.ttf")).into(),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "Roboto".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "RobotoMono".to_owned());
+        cc.egui_ctx.set_fonts(fonts);
+
         let state_rx = state.subscribe_state();
         let start_time = Instant::now();
 

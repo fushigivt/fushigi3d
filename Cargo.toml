@@ -51,7 +51,7 @@ reqwest = { version = "0.12", features = ["json"] }
 image = "0.25"
 
 # Native UI (optional)
-eframe = { version = "0.31", optional = true, default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
+eframe = { version = "0.31", optional = true, default-features = false, features = ["wgpu", "persistence", "x11", "wayland"] }
 egui_extras = { version = "0.31", optional = true, features = ["image"] }
 
 # 3D VRM rendering (optional, used with native-ui)
