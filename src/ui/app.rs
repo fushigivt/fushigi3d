@@ -37,6 +37,7 @@ enum ViewMode {
 enum ControlsTab {
     General,
     Effects,
+    Stickers,
 }
 
 const STORAGE_KEY: &str = "fushigi3d_ui_state";
@@ -98,6 +99,31 @@ impl Default for FxParams {
     }
 }
 
+/// Persisted sticker/particle parameters.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct StickersParams {
+    hearts_enabled: bool,
+    sparkles_enabled: bool,
+    confetti_enabled: bool,
+    snow_enabled: bool,
+    spawn_rate: f32,
+    particle_size: f32,
+}
+
+impl Default for StickersParams {
+    fn default() -> Self {
+        Self {
+            hearts_enabled: false,
+            sparkles_enabled: false,
+            confetti_enabled: false,
+            snow_enabled: false,
+            spawn_rate: 30.0,
+            particle_size: 1.0,
+        }
+    }
+}
+
 /// Persisted UI state saved/restored by eframe's built-in persistence.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -119,6 +145,8 @@ struct PersistedState {
     selected_vad: crate::config::VadProvider,
     #[serde(default)]
     fx: FxParams,
+    #[serde(default)]
+    stickers: StickersParams,
 }
 
 impl Default for PersistedState {
@@ -140,6 +168,7 @@ impl Default for PersistedState {
             selected_device: "default".to_string(),
             selected_vad: crate::config::VadProvider::default(),
             fx: FxParams::default(),
+            stickers: StickersParams::default(),
         }
     }
 }
@@ -249,6 +278,8 @@ pub struct Fushigi3dApp {
     wgpu_format: wgpu::TextureFormat,
     /// Post-processing effect parameters (editable via UI)
     fx: FxParams,
+    /// Sticker/particle parameters (editable via UI)
+    stickers: StickersParams,
     /// Active tab in the controls side panel
     controls_tab: ControlsTab,
 }
@@ -358,6 +389,7 @@ impl Fushigi3dApp {
             wgpu_queue: None,
             wgpu_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             fx: persisted.fx.clone(),
+            stickers: persisted.stickers.clone(),
             controls_tab: ControlsTab::General,
         };
 
@@ -750,6 +782,18 @@ impl Fushigi3dApp {
                 tm.exposure = self.fx.tonemap_exposure;
             }
         }
+
+        // Sync sticker/particle settings
+        {
+            use fushigi3d_fx::particles::StickerPreset;
+            let mut ps = renderer.particle_system();
+            ps.set_preset_enabled(StickerPreset::Hearts, self.stickers.hearts_enabled);
+            ps.set_preset_enabled(StickerPreset::Sparkles, self.stickers.sparkles_enabled);
+            ps.set_preset_enabled(StickerPreset::Confetti, self.stickers.confetti_enabled);
+            ps.set_preset_enabled(StickerPreset::Snow, self.stickers.snow_enabled);
+            ps.set_spawn_rate(self.stickers.spawn_rate);
+            ps.set_particle_size(self.stickers.particle_size);
+        }
         let mapper = match &self.mapper {
             Some(m) => m,
             None => return,
@@ -873,6 +917,7 @@ impl eframe::App for Fushigi3dApp {
             selected_device: self.selected_device.clone(),
             selected_vad: self.selected_vad,
             fx: self.fx.clone(),
+            stickers: self.stickers.clone(),
         };
         eframe::set_value(storage, STORAGE_KEY, &persisted);
     }
@@ -955,14 +1000,18 @@ impl eframe::App for Fushigi3dApp {
 
         if self.show_controls {
         egui::SidePanel::left("controls").show(ctx, |ui| {
-            // Tab selector (Effects tab only available in 3D mode)
-            if self.view_mode != ViewMode::Vrm3D && self.controls_tab == ControlsTab::Effects {
+            // Tab selector (Effects/Stickers only available in 3D mode)
+            if self.view_mode != ViewMode::Vrm3D
+                && (self.controls_tab == ControlsTab::Effects
+                    || self.controls_tab == ControlsTab::Stickers)
+            {
                 self.controls_tab = ControlsTab::General;
             }
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.controls_tab, ControlsTab::General, "General");
                 if self.view_mode == ViewMode::Vrm3D {
                     ui.selectable_value(&mut self.controls_tab, ControlsTab::Effects, "Effects");
+                    ui.selectable_value(&mut self.controls_tab, ControlsTab::Stickers, "Stickers");
                 }
             });
             ui.separator();
@@ -1308,6 +1357,7 @@ impl eframe::App for Fushigi3dApp {
                 let mode = SmoothingMode::from_str(&self.tuning.smoothing_mode);
                 self.smoother.set_mode(mode, &self.tuning);
                 self.fx = FxParams::default();
+                self.stickers = StickersParams::default();
             }
             } // end General tab
 
@@ -1386,6 +1436,30 @@ impl eframe::App for Fushigi3dApp {
                 self.fx = FxParams::default();
             }
             } // end Effects tab
+
+            ControlsTab::Stickers => {
+            ui.add(
+                egui::Slider::new(&mut self.stickers.spawn_rate, 5.0..=100.0)
+                    .text("Spawn rate"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.stickers.particle_size, 0.3..=3.0)
+                    .text("Particle size"),
+            );
+            ui.separator();
+            ui.checkbox(&mut self.stickers.hearts_enabled, "Hearts");
+            ui.checkbox(&mut self.stickers.sparkles_enabled, "Sparkles");
+            ui.checkbox(&mut self.stickers.confetti_enabled, "Confetti");
+            ui.checkbox(&mut self.stickers.snow_enabled, "Snow");
+            if let Some(renderer) = &self.renderer {
+                let ps = renderer.particle_system();
+                ui.label(format!("Active particles: {}", ps.active_count()));
+            }
+            ui.separator();
+            if ui.button("Reset stickers").clicked() {
+                self.stickers = StickersParams::default();
+            }
+            } // end Stickers tab
             } // end match
 
             if let Some(ref err) = self.load_error {

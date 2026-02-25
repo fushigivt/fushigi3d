@@ -1,6 +1,7 @@
 pub mod effect;
 pub mod effects;
 pub mod fullscreen;
+pub mod particles;
 
 use wgpu;
 

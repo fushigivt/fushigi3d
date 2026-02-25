@@ -7,11 +7,13 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
 use eframe::wgpu;
 use glam::{Mat4, Vec3, Vec4};
 
+use fushigi3d_fx::particles::{ParticleGpuData, ParticleSystem, PARTICLE_SHADER_WGSL};
 use fushigi3d_fx::PostProcessChain;
 
 use super::vrm_loader::VrmModel;
@@ -54,6 +56,51 @@ pub struct Uniforms {
     pub base_color: [f32; 4],
     /// x: 1.0 = sample texture, 0.0 = base_color only
     pub use_texture: [f32; 4],
+}
+
+/// Billboard quad vertex (just a 2D offset).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct ParticleQuadVertex {
+    offset: [f32; 2],
+}
+
+impl ParticleQuadVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+/// Camera uniforms for particle rendering (view + proj).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct ParticleCameraUniforms {
+    view: [[f32; 4]; 4],
+    proj: [[f32; 4]; 4],
+}
+
+/// Instance buffer layout for ParticleGpuData (48 bytes per instance).
+const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = [
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 1 },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 12, shader_location: 2 },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 3 },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 32, shader_location: 4 },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint32, offset: 36, shader_location: 5 },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 40, shader_location: 6 },
+];
+
+fn particle_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<ParticleGpuData>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &PARTICLE_INSTANCE_ATTRS,
+    }
 }
 
 /// One draw call's GPU resources (vertex buffer, index buffer, uniform buffer).
@@ -113,6 +160,15 @@ pub struct VrmRenderer {
     transparent_bg: AtomicBool,
     // Post-processing chain
     fx_chain: Mutex<PostProcessChain>,
+    // Particle rendering
+    particle_pipeline: wgpu::RenderPipeline,
+    particle_bind_group: wgpu::BindGroup,
+    particle_uniform_buffer: wgpu::Buffer,
+    particle_vertex_buffer: wgpu::Buffer,
+    particle_index_buffer: wgpu::Buffer,
+    particle_instance_buffer: wgpu::Buffer,
+    particle_system: Mutex<ParticleSystem>,
+    last_frame_time: Mutex<Instant>,
 }
 
 struct LightInfo {
@@ -462,6 +518,118 @@ impl VrmRenderer {
             },
         ];
 
+        // --- Particle rendering setup ---
+        let particle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("particle_shader"),
+            source: wgpu::ShaderSource::Wgsl(PARTICLE_SHADER_WGSL.into()),
+        });
+
+        let particle_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("particle_bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let particle_pl =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("particle_pl"),
+                bind_group_layouts: &[&particle_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let particle_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("particle_pipeline"),
+                layout: Some(&particle_pl),
+                vertex: wgpu::VertexState {
+                    module: &particle_shader,
+                    entry_point: Some("vs_particle"),
+                    buffers: &[ParticleQuadVertex::layout(), particle_instance_layout()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &particle_shader,
+                    entry_point: Some("fs_particle"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: offscreen_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            });
+
+        // Static quad vertex buffer (billboard corners)
+        let quad_vertices = [
+            ParticleQuadVertex { offset: [-0.5, -0.5] },
+            ParticleQuadVertex { offset: [0.5, -0.5] },
+            ParticleQuadVertex { offset: [0.5, 0.5] },
+            ParticleQuadVertex { offset: [-0.5, 0.5] },
+        ];
+        let particle_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle_quad_vb"),
+            size: std::mem::size_of_val(&quad_vertices) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&particle_vertex_buffer, 0, bytemuck::cast_slice(&quad_vertices));
+
+        let quad_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+        let particle_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle_quad_ib"),
+            size: std::mem::size_of_val(&quad_indices) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&particle_index_buffer, 0, bytemuck::cast_slice(&quad_indices));
+
+        // Dynamic instance buffer (max 2048 particles * 48 bytes)
+        let particle_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle_instance_buf"),
+            size: (2048 * std::mem::size_of::<ParticleGpuData>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let particle_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle_cam_ub"),
+            size: std::mem::size_of::<ParticleCameraUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let particle_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("particle_bg"),
+            layout: &particle_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: particle_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
         Self {
             scene_pipeline,
             blit_pipeline,
@@ -489,6 +657,14 @@ impl VrmRenderer {
             use_textures: AtomicBool::new(true),
             transparent_bg: AtomicBool::new(false),
             fx_chain: Mutex::new(fx_chain),
+            particle_pipeline,
+            particle_bind_group,
+            particle_uniform_buffer,
+            particle_vertex_buffer,
+            particle_index_buffer,
+            particle_instance_buffer,
+            particle_system: Mutex::new(ParticleSystem::new()),
+            last_frame_time: Mutex::new(Instant::now()),
         }
     }
 
@@ -573,6 +749,11 @@ impl VrmRenderer {
         self.fx_chain.lock().unwrap()
     }
 
+    /// Access the particle system for enabling/configuring presets.
+    pub fn particle_system(&self) -> std::sync::MutexGuard<'_, ParticleSystem> {
+        self.particle_system.lock().unwrap()
+    }
+
     /// Update vertex buffers with skinned positions and base normals.
     ///
     /// `skinned_meshes`: per-mesh Vec of per-primitive Vec of skinned positions.
@@ -650,6 +831,41 @@ impl VrmRenderer {
             queue.write_buffer(&dc.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         }
 
+        // --- Particle system update ---
+        let particle_count = {
+            let now = Instant::now();
+            let dt = {
+                let mut last = self.last_frame_time.lock().unwrap();
+                let dt = now.duration_since(*last).as_secs_f32().min(0.1);
+                *last = now;
+                dt
+            };
+            let mut ps = self.particle_system.lock().unwrap();
+            ps.update(dt);
+            let gpu_data = ps.gpu_data();
+            let count = gpu_data.len() as u32;
+            if !gpu_data.is_empty() {
+                queue.write_buffer(
+                    &self.particle_instance_buffer,
+                    0,
+                    bytemuck::cast_slice(&gpu_data),
+                );
+            }
+            count
+        };
+
+        // Write particle camera uniforms (view includes mirror matrix)
+        let particle_view = state.view_matrix * model_mat;
+        let cam_uniforms = ParticleCameraUniforms {
+            view: particle_view.to_cols_array_2d(),
+            proj: state.projection_matrix.to_cols_array_2d(),
+        };
+        queue.write_buffer(
+            &self.particle_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&cam_uniforms),
+        );
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vrm_offscreen_encoder"),
         });
@@ -687,6 +903,19 @@ impl VrmRenderer {
                 pass.set_vertex_buffer(0, dc.vertex_buffer.slice(..));
                 pass.set_index_buffer(dc.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..dc.num_indices, 0, 0..1);
+            }
+
+            // Render particles (after geometry, same pass, depth-tested but no depth write)
+            if particle_count > 0 {
+                pass.set_pipeline(&self.particle_pipeline);
+                pass.set_bind_group(0, &self.particle_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.particle_vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.particle_instance_buffer.slice(..));
+                pass.set_index_buffer(
+                    self.particle_index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..6, 0, 0..particle_count);
             }
         }
 
