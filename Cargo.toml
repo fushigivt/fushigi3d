@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Headless VTuber/PNGTuber service for Linux"
 authors = ["Fushigi3D Contributors"]
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/fushigivt/fushigi3d"
 
 [dependencies]
