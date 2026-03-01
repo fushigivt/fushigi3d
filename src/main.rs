@@ -11,14 +11,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use fushigi3d::{
     audio::AudioPipeline,
     config::Config,
-    output::{browser::BrowserServer, obs::ObsClient},
+    output::obs::ObsClient,
     tracking::{
         mediapipe::MpReceiver,
         osf::OsfReceiver,
         subprocess::{check_mediapipe_available, MpSubprocess, OsfSubprocess},
         vmc::{self, VmcReceiver},
     },
-    web::WebServer,
     AppState,
 };
 
@@ -49,14 +48,6 @@ struct Args {
     /// Disable audio capture
     #[arg(long)]
     no_audio: bool,
-
-    /// Disable HTTP server
-    #[arg(long)]
-    no_http: bool,
-
-    /// HTTP server port (overrides config)
-    #[arg(short, long)]
-    port: Option<u16>,
 
     /// Run in headless mode (no UI window)
     #[arg(long)]
@@ -158,20 +149,12 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
     if args.no_audio {
         config.audio.enabled = false;
     }
-    if args.no_http {
-        config.http.enabled = false;
-    }
-    if let Some(port) = args.port {
-        config.http.port = port;
-    }
-
     // Validate configuration
     config.validate()?;
 
     info!("Audio device: {}", config.audio.device);
     info!("VAD provider: {:?}", config.vad.provider);
     info!("OBS integration: {}", config.obs.enabled);
-    info!("HTTP server: {}", config.http.enabled);
 
     // Create shared application state
     let state = AppState::new(config.clone());
@@ -195,16 +178,6 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
             error!("OBS client error: {}", e);
         }
     });
-
-    // Start HTTP server if enabled
-    if config.http.enabled {
-        let http_state = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Err(e) = run_http_server(http_state).await {
-                error!("HTTP server error: {}", e);
-            }
-        });
-    }
 
     // Auto-detect MediaPipe if no tracker is explicitly enabled
     if !config.osf.enabled && !config.vmc.receiver_enabled && !config.mediapipe.enabled {
@@ -461,38 +434,6 @@ async fn run_obs_client(state: Arc<AppState>) -> anyhow::Result<()> {
             }
         }
     }
-}
-
-async fn run_http_server(state: Arc<AppState>) -> anyhow::Result<()> {
-    let config = state.config.read().await;
-    let http_config = config.http.clone();
-    let avatar_config = config.avatar.clone();
-    drop(config);
-
-    // Start browser source server (serves avatar for OBS browser source)
-    let browser_server = BrowserServer::new(state.clone(), &avatar_config);
-
-    // Start web dashboard server
-    let web_server = WebServer::new(state.clone(), &http_config);
-
-    let addr = format!("{}:{}", http_config.host, http_config.port);
-    info!("HTTP server listening on {}", addr);
-
-    // Combine both servers using axum's merge
-    let app = web_server.router().merge(browser_server.router());
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-
-    let mut shutdown_rx = state.subscribe_shutdown();
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.recv().await;
-        })
-        .await?;
-
-    info!("HTTP server stopped");
-    Ok(())
 }
 
 async fn run_osf_tracking(state: Arc<AppState>) -> anyhow::Result<()> {

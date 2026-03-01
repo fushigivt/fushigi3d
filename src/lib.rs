@@ -12,7 +12,6 @@ pub mod config;
 pub mod error;
 pub mod output;
 pub mod tracking;
-pub mod web;
 
 #[cfg(feature = "native-ui")]
 pub mod ui;

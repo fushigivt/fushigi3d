@@ -14,7 +14,6 @@ pub struct Config {
     pub vad: VadConfig,
     pub avatar: AvatarConfig,
     pub obs: ObsConfig,
-    pub http: HttpConfig,
     pub vmc: VmcConfig,
     pub osf: OsfConfig,
     pub mediapipe: MediaPipeConfig,
@@ -27,7 +26,6 @@ impl Default for Config {
             vad: VadConfig::default(),
             avatar: AvatarConfig::default(),
             obs: ObsConfig::default(),
-            http: HttpConfig::default(),
             vmc: VmcConfig::default(),
             osf: OsfConfig::default(),
             mediapipe: MediaPipeConfig::default(),
@@ -117,15 +115,6 @@ impl Config {
                     self.mediapipe.tracker_script
                 );
             }
-        }
-
-        // Validate HTTP settings
-        if self.http.port == 0 {
-            return Err(ConfigError::InvalidValue {
-                field: "http.port".to_string(),
-                message: "Port must be greater than 0".to_string(),
-            }
-            .into());
         }
 
         Ok(())
@@ -447,34 +436,6 @@ pub enum ObsMode {
 impl Default for ObsMode {
     fn default() -> Self {
         Self::Scene
-    }
-}
-
-/// HTTP server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct HttpConfig {
-    /// Enable HTTP server
-    pub enabled: bool,
-    /// HTTP server host
-    pub host: String,
-    /// HTTP server port
-    pub port: u16,
-    /// Enable CORS
-    pub cors_enabled: bool,
-    /// Allowed origins for CORS
-    pub cors_origins: Vec<String>,
-}
-
-impl Default for HttpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            cors_enabled: true,
-            cors_origins: vec!["*".to_string()],
-        }
     }
 }
 

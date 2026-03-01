@@ -17,12 +17,6 @@ pub enum Fushigi3dError {
     #[error("Output error: {0}")]
     Output(#[from] OutputError),
 
-    #[error("Web server error: {0}")]
-    Web(#[from] WebError),
-
-    #[error("Integration error: {0}")]
-    Integration(#[from] IntegrationError),
-
     #[error("Tracking error: {0}")]
     Tracking(#[from] TrackingError),
 
@@ -110,44 +104,6 @@ pub enum OutputError {
 
     #[error("VMC parse error: {0}")]
     VmcParse(String),
-
-    #[error("Browser source server error: {0}")]
-    BrowserServer(String),
-
-    #[error("SSE broadcast error: {0}")]
-    SseBroadcast(String),
-}
-
-/// Web server errors
-#[derive(Error, Debug)]
-pub enum WebError {
-    #[error("Failed to bind to address: {0}")]
-    Bind(String),
-
-    #[error("Server startup failed: {0}")]
-    Startup(String),
-
-    #[error("Template rendering failed: {0}")]
-    TemplateRender(String),
-
-    #[error("Asset upload failed: {0}")]
-    AssetUpload(String),
-}
-
-/// Integration-related errors
-#[derive(Error, Debug)]
-pub enum IntegrationError {
-    #[error("Media service connection failed: {0}")]
-    MediaConnection(String),
-
-    #[error("AI service connection failed: {0}")]
-    AiConnection(String),
-
-    #[error("TTS synthesis failed: {0}")]
-    TtsSynthesis(String),
-
-    #[error("LLM request failed: {0}")]
-    LlmRequest(String),
 }
 
 /// Tracking-related errors (OSF + VMC + MediaPipe)
