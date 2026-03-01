@@ -1,4 +1,4 @@
-//! Tracking subprocess managers
+//! Tracking subprocess manager
 //!
 //! Launches and manages Python tracker subprocesses (OpenSeeFace, MediaPipe)
 //! as child processes with automatic cleanup on drop.
@@ -8,165 +8,63 @@ use tokio::process::{Child, Command};
 use crate::config::{MediaPipeConfig, OsfConfig};
 use crate::error::{Fushigi3dError, TrackingError};
 
-/// Manages an OpenSeeFace facetracker subprocess
-pub struct OsfSubprocess {
+/// Generic tracker subprocess manager.
+///
+/// Wraps a `Child` process that is built from a command closure, providing
+/// start / stop / health-check / auto-restart in one place.
+pub struct TrackerSubprocess {
+    name: &'static str,
     child: Option<Child>,
-    config: OsfConfig,
+    build_cmd: Box<dyn Fn() -> Command + Send>,
+    pub auto_restart: bool,
+    pub restart_delay_secs: u64,
 }
 
-impl OsfSubprocess {
-    /// Create a new subprocess manager (does not start the process)
-    pub fn new(config: &OsfConfig) -> Self {
-        Self {
-            child: None,
-            config: config.clone(),
-        }
-    }
-
-    /// Launch the facetracker subprocess.
-    ///
-    /// Runs: `python3 <facetracker_path> -v 0 -s 1 --ip <listen_address> --port <port>
-    ///        --capture <camera_device> --model-dir <model_quality>
-    ///        --max-faces <max_faces> --width <capture_width> --height <capture_height>
-    ///        --fps <capture_fps>`
+impl TrackerSubprocess {
+    /// Launch the tracker subprocess.
     pub fn start(&mut self) -> Result<(), Fushigi3dError> {
         if self.is_running() {
             return Ok(());
         }
 
-        let child = Command::new("python3")
-            .arg(&self.config.facetracker_path)
-            .args(["-v", "0"])          // no visualization
-            .args(["-s", "1"])          // headless / no preview
-            .args(["--ip", &self.config.listen_address])
-            .args(["--port", &self.config.port.to_string()])
-            .args(["--capture", &self.config.camera_device.to_string()])
-            .args(["--model-dir", &self.config.model_quality.to_string()])
-            .args(["--max-faces", &self.config.max_faces.to_string()])
-            .args(["--width", &self.config.capture_width.to_string()])
-            .args(["--height", &self.config.capture_height.to_string()])
-            .args(["--fps", &self.config.capture_fps.to_string()])
+        let child = (self.build_cmd)()
             .kill_on_drop(true)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| {
-                TrackingError::OsfSubprocess(format!(
-                    "Failed to launch facetracker at '{}': {}",
-                    self.config.facetracker_path, e
+                TrackingError::Subprocess(format!(
+                    "Failed to launch {} subprocess: {}",
+                    self.name, e
                 ))
             })?;
 
         tracing::info!(
-            "OpenSeeFace subprocess started (pid: {:?}, camera: {}, port: {})",
+            "{} subprocess started (pid: {:?})",
+            self.name,
             child.id(),
-            self.config.camera_device,
-            self.config.port,
         );
 
         self.child = Some(child);
         Ok(())
     }
 
-    /// Check if the subprocess is still running (non-blocking)
-    pub fn is_running(&mut self) -> bool {
-        match &mut self.child {
-            Some(child) => match child.try_wait() {
-                Ok(None) => true,              // still running
-                Ok(Some(status)) => {
-                    tracing::warn!("OpenSeeFace subprocess exited with: {}", status);
-                    self.child = None;
-                    false
-                }
-                Err(e) => {
-                    tracing::error!("Failed to check subprocess status: {}", e);
-                    false
-                }
-            },
-            None => false,
-        }
-    }
-
-    /// Stop the subprocess by killing it
-    pub async fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            tracing::info!("Stopping OpenSeeFace subprocess (pid: {:?})", child.id());
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-        }
-    }
-}
-
-/// Manages a MediaPipe tracker subprocess (scripts/mp_tracker.py)
-pub struct MpSubprocess {
-    child: Option<Child>,
-    config: MediaPipeConfig,
-}
-
-impl MpSubprocess {
-    /// Create a new subprocess manager (does not start the process)
-    pub fn new(config: &MediaPipeConfig) -> Self {
-        Self {
-            child: None,
-            config: config.clone(),
-        }
-    }
-
-    /// Launch the MediaPipe tracker subprocess.
-    pub fn start(&mut self) -> Result<(), Fushigi3dError> {
-        if self.is_running() {
-            return Ok(());
-        }
-
-        let mut cmd = Command::new("python3");
-        cmd.arg(&self.config.tracker_script)
-            .args(["--ip", &self.config.listen_address])
-            .args(["--port", &self.config.port.to_string()])
-            .args(["--capture", &self.config.camera_device.to_string()])
-            .args(["--width", &self.config.capture_width.to_string()])
-            .args(["--height", &self.config.capture_height.to_string()])
-            .args(["--fps", &self.config.capture_fps.to_string()])
-            .args(["--model-dir", &self.config.model_dir]);
-
-        if !self.config.enable_body_tracking {
-            cmd.arg("--no-pose");
-        }
-
-        let child = cmd
-            .kill_on_drop(true)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                TrackingError::MpSubprocess(format!(
-                    "Failed to launch MediaPipe tracker at '{}': {}",
-                    self.config.tracker_script, e
-                ))
-            })?;
-
-        tracing::info!(
-            "MediaPipe subprocess started (pid: {:?}, camera: {}, port: {})",
-            child.id(),
-            self.config.camera_device,
-            self.config.port,
-        );
-
-        self.child = Some(child);
-        Ok(())
-    }
-
-    /// Check if the subprocess is still running (non-blocking)
+    /// Check if the subprocess is still running (non-blocking).
     pub fn is_running(&mut self) -> bool {
         match &mut self.child {
             Some(child) => match child.try_wait() {
                 Ok(None) => true,
                 Ok(Some(status)) => {
-                    tracing::warn!("MediaPipe subprocess exited with: {}", status);
+                    tracing::warn!("{} subprocess exited with: {}", self.name, status);
                     self.child = None;
                     false
                 }
                 Err(e) => {
-                    tracing::error!("Failed to check MediaPipe subprocess status: {}", e);
+                    tracing::error!(
+                        "Failed to check {} subprocess status: {}",
+                        self.name,
+                        e
+                    );
                     false
                 }
             },
@@ -174,16 +72,65 @@ impl MpSubprocess {
         }
     }
 
-    /// Stop the subprocess by killing it
+    /// Stop the subprocess by killing it.
     pub async fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            tracing::info!(
-                "Stopping MediaPipe subprocess (pid: {:?})",
-                child.id()
-            );
+            tracing::info!("Stopping {} subprocess (pid: {:?})", self.name, child.id());
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
+    }
+}
+
+/// Create a `TrackerSubprocess` for OpenSeeFace.
+pub fn osf_subprocess(config: &OsfConfig) -> TrackerSubprocess {
+    let config = config.clone();
+    TrackerSubprocess {
+        name: "OpenSeeFace",
+        child: None,
+        build_cmd: Box::new(move || {
+            let mut cmd = Command::new("python3");
+            cmd.arg(&config.facetracker_path)
+                .args(["-v", "0"])
+                .args(["-s", "1"])
+                .args(["--ip", &config.listen_address])
+                .args(["--port", &config.port.to_string()])
+                .args(["--capture", &config.camera_device.to_string()])
+                .args(["--model-dir", &config.model_quality.to_string()])
+                .args(["--max-faces", &config.max_faces.to_string()])
+                .args(["--width", &config.capture_width.to_string()])
+                .args(["--height", &config.capture_height.to_string()])
+                .args(["--fps", &config.capture_fps.to_string()]);
+            cmd
+        }),
+        auto_restart: config.auto_restart,
+        restart_delay_secs: config.restart_delay_secs,
+    }
+}
+
+/// Create a `TrackerSubprocess` for the MediaPipe Python tracker.
+pub fn mp_subprocess(config: &MediaPipeConfig) -> TrackerSubprocess {
+    let config = config.clone();
+    TrackerSubprocess {
+        name: "MediaPipe",
+        child: None,
+        build_cmd: Box::new(move || {
+            let mut cmd = Command::new("python3");
+            cmd.arg(&config.tracker_script)
+                .args(["--ip", &config.listen_address])
+                .args(["--port", &config.port.to_string()])
+                .args(["--capture", &config.camera_device.to_string()])
+                .args(["--width", &config.capture_width.to_string()])
+                .args(["--height", &config.capture_height.to_string()])
+                .args(["--fps", &config.capture_fps.to_string()])
+                .args(["--model-dir", &config.model_dir]);
+            if !config.enable_body_tracking {
+                cmd.arg("--no-pose");
+            }
+            cmd
+        }),
+        auto_restart: config.auto_restart,
+        restart_delay_secs: config.restart_delay_secs,
     }
 }
 

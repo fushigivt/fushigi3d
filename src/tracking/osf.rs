@@ -30,6 +30,7 @@ use tokio::sync::RwLock;
 use crate::avatar::AvatarState;
 use crate::config::OsfConfig;
 use crate::error::{TrackingError, Fushigi3dError};
+use crate::tracking::TrackingReceiver;
 
 /// Size of a single face frame in bytes
 pub const FRAME_SIZE: usize = 1785;
@@ -391,6 +392,25 @@ impl OsfReceiver {
     pub fn stop(&mut self) {
         self.socket = None;
         tracing::info!("OSF receiver stopped");
+    }
+}
+
+impl TrackingReceiver for OsfReceiver {
+    fn start(&mut self) -> Result<(), Fushigi3dError> {
+        self.start()
+    }
+
+    fn stop(&mut self) {
+        self.stop();
+    }
+
+    async fn process(&self, current: &AvatarState) -> Result<Option<AvatarState>, Fushigi3dError> {
+        match self.process().await? {
+            Some(data) if data.has_data => {
+                Ok(Some(data.to_avatar_state(current, self.config.blend_with_vad)))
+            }
+            _ => Ok(None),
+        }
     }
 }
 

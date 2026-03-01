@@ -15,6 +15,7 @@ use crate::avatar::AvatarState;
 use crate::config::MediaPipeConfig;
 use crate::error::{Fushigi3dError, TrackingError};
 use crate::tracking::vmc;
+use crate::tracking::TrackingReceiver;
 
 /// A single JSON packet from the MediaPipe tracker
 #[derive(Debug, Clone, Deserialize)]
@@ -175,6 +176,25 @@ impl MpReceiver {
     pub fn stop(&mut self) {
         self.socket = None;
         tracing::info!("MediaPipe receiver stopped");
+    }
+}
+
+impl TrackingReceiver for MpReceiver {
+    fn start(&mut self) -> Result<(), Fushigi3dError> {
+        self.start()
+    }
+
+    fn stop(&mut self) {
+        self.stop();
+    }
+
+    async fn process(&self, current: &AvatarState) -> Result<Option<AvatarState>, Fushigi3dError> {
+        match self.process().await? {
+            Some(data) if data.has_data => {
+                Ok(Some(data.to_avatar_state(current, self.config.blend_with_vad)))
+            }
+            _ => Ok(None),
+        }
     }
 }
 

@@ -13,8 +13,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+use crate::avatar::AvatarState;
 use crate::config::VmcConfig;
 use crate::error::{TrackingError, Fushigi3dError};
+use crate::tracking::TrackingReceiver;
 
 /// VMC data received from face tracking software
 #[derive(Debug, Clone, Default)]
@@ -231,6 +233,49 @@ impl VmcReceiver {
     pub fn stop(&mut self) {
         self.socket = None;
         tracing::info!("VMC receiver stopped");
+    }
+}
+
+impl TrackingReceiver for VmcReceiver {
+    fn start(&mut self) -> Result<(), Fushigi3dError> {
+        self.start()
+    }
+
+    fn stop(&mut self) {
+        self.stop();
+    }
+
+    async fn process(&self, current: &AvatarState) -> Result<Option<AvatarState>, Fushigi3dError> {
+        match self.process().await? {
+            Some(data) if data.has_data => {
+                let mouth_open = blendshapes::mouth_open(&data.blendshapes);
+                let blink = blendshapes::average_blink(&data.blendshapes);
+                let head_euler = quaternion_to_euler(data.head_rotation);
+
+                let mut state = current
+                    .clone()
+                    .with_mouth_open(mouth_open)
+                    .with_blink(blink)
+                    .with_head_position(data.head_position)
+                    .with_head_rotation(head_euler)
+                    .with_blendshapes(data.blendshapes.clone());
+
+                if !self.config.blend_with_vad {
+                    state = state.with_speaking(mouth_open > 0.15);
+                }
+
+                for (expr_name, mapping) in &self.config.expressions {
+                    if let Some(&value) = data.blendshapes.get(&mapping.blendshape) {
+                        if value > mapping.threshold {
+                            state = state.with_expression(Some(expr_name.clone()));
+                        }
+                    }
+                }
+
+                Ok(Some(state))
+            }
+            _ => Ok(None),
+        }
     }
 }
 

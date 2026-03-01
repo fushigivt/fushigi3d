@@ -132,6 +132,9 @@ pub enum TrackingError {
 
     #[error("MediaPipe subprocess error: {0}")]
     MpSubprocess(String),
+
+    #[error("Tracker subprocess error: {0}")]
+    Subprocess(String),
 }
 
 /// Result type alias for Fushigi3D operations

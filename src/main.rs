@@ -15,8 +15,9 @@ use fushigi3d::{
     tracking::{
         mediapipe::MpReceiver,
         osf::OsfReceiver,
-        subprocess::{check_mediapipe_available, MpSubprocess, OsfSubprocess},
-        vmc::{self, VmcReceiver},
+        subprocess::{check_mediapipe_available, mp_subprocess, osf_subprocess, TrackerSubprocess},
+        vmc::VmcReceiver,
+        TrackingReceiver,
     },
     AppState,
 };
@@ -197,8 +198,22 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
     // Start OpenSeeFace tracking if enabled
     if config.osf.enabled {
         let osf_state = Arc::clone(&state);
+        let osf_config = config.osf.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_osf_tracking(osf_state).await {
+            let mut receiver = OsfReceiver::new(&osf_config);
+            let mut subprocess = if osf_config.auto_launch {
+                let mut sp = osf_subprocess(&osf_config);
+                if let Err(e) = sp.start() {
+                    error!("Failed to auto-launch OpenSeeFace: {}", e);
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                Some(sp)
+            } else {
+                None
+            };
+            if let Err(e) =
+                run_tracking_loop(osf_state, &mut receiver, subprocess.as_mut(), "OSF").await
+            {
                 error!("OSF tracking error: {}", e);
             }
         });
@@ -207,8 +222,12 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
     // Start VMC tracking if enabled
     if config.vmc.receiver_enabled {
         let vmc_state = Arc::clone(&state);
+        let vmc_config = config.vmc.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_vmc_tracking(vmc_state).await {
+            let mut receiver = VmcReceiver::new(&vmc_config);
+            if let Err(e) =
+                run_tracking_loop(vmc_state, &mut receiver, None, "VMC").await
+            {
                 error!("VMC tracking error: {}", e);
             }
         });
@@ -217,8 +236,22 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
     // Start MediaPipe tracking if enabled
     if config.mediapipe.enabled {
         let mp_state = Arc::clone(&state);
+        let mp_config = config.mediapipe.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_mediapipe_tracking(mp_state).await {
+            let mut receiver = MpReceiver::new(&mp_config);
+            let mut subprocess = if mp_config.auto_launch {
+                let mut sp = mp_subprocess(&mp_config);
+                if let Err(e) = sp.start() {
+                    error!("Failed to auto-launch MediaPipe tracker: {}", e);
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                Some(sp)
+            } else {
+                None
+            };
+            if let Err(e) =
+                run_tracking_loop(mp_state, &mut receiver, subprocess.as_mut(), "MediaPipe").await
+            {
                 error!("MediaPipe tracking error: {}", e);
             }
         });
@@ -436,74 +469,56 @@ async fn run_obs_client(state: Arc<AppState>) -> anyhow::Result<()> {
     }
 }
 
-async fn run_osf_tracking(state: Arc<AppState>) -> anyhow::Result<()> {
-    let config = state.config.read().await;
-    let osf_config = config.osf.clone();
-    drop(config);
-
+/// Generic tracking loop shared by all backends.
+///
+/// 1. Starts the receiver
+/// 2. Loops: receive → update avatar state → check subprocess health
+/// 3. On shutdown: stops receiver + subprocess
+async fn run_tracking_loop(
+    state: Arc<AppState>,
+    receiver: &mut impl TrackingReceiver,
+    mut subprocess: Option<&mut TrackerSubprocess>,
+    name: &str,
+) -> anyhow::Result<()> {
     let mut shutdown_rx = state.subscribe_shutdown();
 
-    // Optionally launch the subprocess
-    let mut subprocess = if osf_config.auto_launch {
-        let mut sp = OsfSubprocess::new(&osf_config);
-        if let Err(e) = sp.start() {
-            error!("Failed to auto-launch OpenSeeFace: {}", e);
-            // Continue anyway — user may have it running externally
-        }
-        // Give the tracker a moment to start listening
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        Some(sp)
-    } else {
-        None
-    };
-
-    // Start the receiver
-    let mut receiver = OsfReceiver::new(&osf_config);
     receiver.start()?;
-
-    info!(
-        "OSF tracking started (port: {}, blend_with_vad: {})",
-        osf_config.port, osf_config.blend_with_vad
-    );
+    info!("{} tracking started", name);
 
     loop {
+        let current = state.get_avatar_state().await;
         tokio::select! {
-            result = receiver.process() => {
+            result = receiver.process(&current) => {
                 match result {
-                    Ok(Some(data)) if data.has_data => {
-                        let current = state.get_avatar_state().await;
-                        let new_state = data.to_avatar_state(&current, osf_config.blend_with_vad);
+                    Ok(Some(new_state)) => {
                         if new_state != current {
                             state.update_avatar_state(new_state).await;
                         }
                     }
-                    Ok(_) => {}
+                    Ok(None) => {}
                     Err(e) => {
-                        error!("OSF receive error: {}", e);
+                        error!("{} receive error: {}", name, e);
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                }
-
-                // Check subprocess health and auto-restart if needed
-                if let Some(ref mut sp) = subprocess {
-                    if !sp.is_running() && osf_config.auto_restart {
-                        info!(
-                            "OpenSeeFace subprocess crashed, restarting in {}s",
-                            osf_config.restart_delay_secs
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(
-                            osf_config.restart_delay_secs,
-                        ))
-                        .await;
-                        if let Err(e) = sp.start() {
-                            error!("Failed to restart OpenSeeFace: {}", e);
-                        }
                     }
                 }
             }
             _ = shutdown_rx.recv() => {
-                info!("OSF tracking shutting down");
+                info!("{} tracking shutting down", name);
                 break;
+            }
+        }
+
+        // Check subprocess health and auto-restart if needed
+        if let Some(ref mut sp) = subprocess {
+            if !sp.is_running() && sp.auto_restart {
+                info!(
+                    "{} subprocess crashed, restarting in {}s",
+                    name, sp.restart_delay_secs
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(sp.restart_delay_secs)).await;
+                if let Err(e) = sp.start() {
+                    error!("Failed to restart {} subprocess: {}", name, e);
+                }
             }
         }
 
@@ -513,161 +528,7 @@ async fn run_osf_tracking(state: Arc<AppState>) -> anyhow::Result<()> {
 
     // Cleanup
     receiver.stop();
-    if let Some(ref mut sp) = subprocess {
-        sp.stop().await;
-    }
-
-    Ok(())
-}
-
-async fn run_vmc_tracking(state: Arc<AppState>) -> anyhow::Result<()> {
-    let config = state.config.read().await;
-    let vmc_config = config.vmc.clone();
-    drop(config);
-
-    let mut shutdown_rx = state.subscribe_shutdown();
-
-    let mut receiver = VmcReceiver::new(&vmc_config);
-    receiver.start()?;
-
-    info!(
-        "VMC tracking started (port: {}, blend_with_vad: {})",
-        vmc_config.receiver_port, vmc_config.blend_with_vad
-    );
-
-    loop {
-        tokio::select! {
-            result = receiver.process() => {
-                match result {
-                    Ok(Some(data)) if data.has_data => {
-                        let current = state.get_avatar_state().await;
-
-                        // Map VMC data to avatar state
-                        let mouth_open = vmc::blendshapes::mouth_open(&data.blendshapes);
-                        let blink = vmc::blendshapes::average_blink(&data.blendshapes);
-                        let head_euler = vmc::quaternion_to_euler(data.head_rotation);
-
-                        let mut new_state = current.clone()
-                            .with_mouth_open(mouth_open)
-                            .with_blink(blink)
-                            .with_head_position(data.head_position)
-                            .with_head_rotation(head_euler)
-                            .with_blendshapes(data.blendshapes.clone());
-
-                        if !vmc_config.blend_with_vad {
-                            new_state = new_state.with_speaking(mouth_open > 0.15);
-                        }
-
-                        // Check expression mappings
-                        for (expr_name, mapping) in &vmc_config.expressions {
-                            if let Some(&value) = data.blendshapes.get(&mapping.blendshape) {
-                                if value > mapping.threshold {
-                                    new_state = new_state.with_expression(Some(expr_name.clone()));
-                                }
-                            }
-                        }
-
-                        if new_state != current {
-                            state.update_avatar_state(new_state).await;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("VMC receive error: {}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                }
-            }
-            _ = shutdown_rx.recv() => {
-                info!("VMC tracking shutting down");
-                break;
-            }
-        }
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-    }
-
-    receiver.stop();
-    Ok(())
-}
-
-async fn run_mediapipe_tracking(state: Arc<AppState>) -> anyhow::Result<()> {
-    let config = state.config.read().await;
-    let mp_config = config.mediapipe.clone();
-    drop(config);
-
-    let mut shutdown_rx = state.subscribe_shutdown();
-
-    // Optionally launch the subprocess
-    let mut subprocess = if mp_config.auto_launch {
-        let mut sp = MpSubprocess::new(&mp_config);
-        if let Err(e) = sp.start() {
-            error!("Failed to auto-launch MediaPipe tracker: {}", e);
-        }
-        // Give the tracker a moment to start
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        Some(sp)
-    } else {
-        None
-    };
-
-    // Start the receiver
-    let mut receiver = MpReceiver::new(&mp_config);
-    receiver.start()?;
-
-    info!(
-        "MediaPipe tracking started (port: {}, blend_with_vad: {})",
-        mp_config.port, mp_config.blend_with_vad
-    );
-
-    loop {
-        tokio::select! {
-            result = receiver.process() => {
-                match result {
-                    Ok(Some(data)) if data.has_data => {
-                        let current = state.get_avatar_state().await;
-                        let new_state = data.to_avatar_state(&current, mp_config.blend_with_vad);
-                        if new_state != current {
-                            state.update_avatar_state(new_state).await;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("MediaPipe receive error: {}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                }
-
-                // Check subprocess health and auto-restart if needed
-                if let Some(ref mut sp) = subprocess {
-                    if !sp.is_running() && mp_config.auto_restart {
-                        info!(
-                            "MediaPipe subprocess crashed, restarting in {}s",
-                            mp_config.restart_delay_secs
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(
-                            mp_config.restart_delay_secs,
-                        ))
-                        .await;
-                        if let Err(e) = sp.start() {
-                            error!("Failed to restart MediaPipe tracker: {}", e);
-                        }
-                    }
-                }
-            }
-            _ = shutdown_rx.recv() => {
-                info!("MediaPipe tracking shutting down");
-                break;
-            }
-        }
-
-        // Small yield to avoid busy-spinning when no data arrives
-        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-    }
-
-    // Cleanup
-    receiver.stop();
-    if let Some(ref mut sp) = subprocess {
+    if let Some(sp) = subprocess {
         sp.stop().await;
     }
 
