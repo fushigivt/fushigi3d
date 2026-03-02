@@ -6,6 +6,18 @@ use std::path::{Path, PathBuf};
 use crate::config::AvatarConfig;
 use crate::error::{AvatarError, Fushigi3dError};
 
+/// Map a file extension to its MIME type.
+fn mime_from_extension(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Manages avatar assets (images)
 #[derive(Debug)]
 pub struct AssetManager {
@@ -53,25 +65,13 @@ impl AssetManager {
             return Ok(());
         }
 
-        // Add state images
-        for (state, filename) in &self.state_images {
+        for (key, filename) in self.state_images.iter().chain(self.expression_images.iter()) {
             let path = self.base_dir.join(filename);
             if path.exists() {
-                self.assets.insert(state.clone(), path);
-                tracing::debug!("Loaded state asset: {} -> {}", state, filename);
+                self.assets.insert(key.clone(), path);
+                tracing::debug!("Loaded asset: {} -> {}", key, filename);
             } else {
-                tracing::warn!("State asset not found: {} ({})", state, path.display());
-            }
-        }
-
-        // Add expression images
-        for (expr, filename) in &self.expression_images {
-            let path = self.base_dir.join(filename);
-            if path.exists() {
-                self.assets.insert(expr.clone(), path);
-                tracing::debug!("Loaded expression asset: {} -> {}", expr, filename);
-            } else {
-                tracing::warn!("Expression asset not found: {} ({})", expr, path.display());
+                tracing::warn!("Asset not found: {} ({})", key, path.display());
             }
         }
 
@@ -155,15 +155,7 @@ impl AssetManager {
     pub fn get_mime_type(&self, key: &str) -> Option<&'static str> {
         let path = self.get_path(key)?;
         let extension = path.extension()?.to_str()?;
-
-        Some(match extension.to_lowercase().as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            _ => "application/octet-stream",
-        })
+        Some(mime_from_extension(extension))
     }
 }
 
@@ -188,14 +180,7 @@ impl AssetInfo {
         let metadata = std::fs::metadata(path).ok()?;
         let extension = path.extension()?.to_str()?;
 
-        let mime_type = match extension.to_lowercase().as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            _ => "application/octet-stream",
-        };
+        let mime_type = mime_from_extension(extension);
 
         Some(Self {
             key: key.to_string(),

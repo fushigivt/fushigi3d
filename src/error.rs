@@ -98,12 +98,6 @@ pub enum OutputError {
 
     #[error("OBS source not found: {0}")]
     ObsSourceNotFound(String),
-
-    #[error("VMC receiver error: {0}")]
-    VmcReceiver(String),
-
-    #[error("VMC parse error: {0}")]
-    VmcParse(String),
 }
 
 /// Tracking-related errors (OSF + VMC + MediaPipe)

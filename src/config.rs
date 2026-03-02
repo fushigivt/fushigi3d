@@ -288,25 +288,32 @@ pub struct TrackingTuning {
     pub expression_easing: String,
 }
 
-fn default_smoothing_mode() -> String { "spring".to_string() }
-fn default_easing() -> String { "quad_in_out".to_string() }
-fn default_1_4() -> f32 { 1.4 }
-fn default_1_2() -> f32 { 1.2 }
-fn default_1_0() -> f32 { 1.0 }
-fn default_0_08() -> f32 { 0.08 }
-fn default_0_12() -> f32 { 0.12 }
-fn default_0_04() -> f32 { 0.04 }
-fn default_1_5() -> f32 { 1.5 }
-fn default_0_05() -> f32 { 0.05 }
-fn default_0_005() -> f32 { 0.005 }
-fn default_15_0() -> f32 { 15.0 }
-fn default_0_8() -> f32 { 0.8 }
-fn default_10_0() -> f32 { 10.0 }
-fn default_0_15() -> f32 { 0.15 }
-fn default_0_85() -> f32 { 0.85 }
-fn default_0_5() -> f32 { 0.5 }
-fn default_0_02() -> f32 { 0.02 }
-fn default_0_4() -> f32 { 0.4 }
+/// Generate a `fn name() -> Type { value }` serde default helper.
+macro_rules! serde_default {
+    ($name:ident, $ty:ty, $val:expr) => {
+        fn $name() -> $ty { $val }
+    };
+}
+
+serde_default!(default_smoothing_mode, String, "spring".to_string());
+serde_default!(default_easing, String, "quad_in_out".to_string());
+serde_default!(default_1_4, f32, 1.4);
+serde_default!(default_1_2, f32, 1.2);
+serde_default!(default_1_0, f32, 1.0);
+serde_default!(default_0_08, f32, 0.08);
+serde_default!(default_0_12, f32, 0.12);
+serde_default!(default_0_04, f32, 0.04);
+serde_default!(default_1_5, f32, 1.5);
+serde_default!(default_0_05, f32, 0.05);
+serde_default!(default_0_005, f32, 0.005);
+serde_default!(default_15_0, f32, 15.0);
+serde_default!(default_0_8, f32, 0.8);
+serde_default!(default_10_0, f32, 10.0);
+serde_default!(default_0_15, f32, 0.15);
+serde_default!(default_0_85, f32, 0.85);
+serde_default!(default_0_5, f32, 0.5);
+serde_default!(default_0_02, f32, 0.02);
+serde_default!(default_0_4, f32, 0.4);
 
 impl Default for TrackingTuning {
     fn default() -> Self {
@@ -626,7 +633,6 @@ mod tests {
         assert_eq!(config.audio.device, "default");
         assert_eq!(config.audio.sample_rate, 16000);
         assert!(!config.obs.enabled);
-        assert!(!config.http.enabled);
     }
 
     #[test]

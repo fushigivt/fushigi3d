@@ -158,16 +158,7 @@ impl EnergyVad {
             return (false, 0.0, self.smoothed_energy);
         }
 
-        // Calculate RMS energy
-        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-        let rms = (sum_sq / samples.len() as f32).sqrt();
-
-        // Convert to dB
-        let energy_db = if rms > 0.0 {
-            20.0 * rms.log10()
-        } else {
-            -100.0
-        };
+        let energy_db = compute_energy_db(samples);
 
         // Apply smoothing
         self.smoothed_energy = self.smoothing_factor * energy_db
@@ -378,7 +369,6 @@ fn normalize_rms(chunk: &mut [f32]) {
 }
 
 /// Compute RMS energy in dB from f32 samples.
-#[cfg(feature = "silero-vad")]
 fn compute_energy_db(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return -100.0;
@@ -438,7 +428,6 @@ mod tests {
         assert!(!result.is_speech);
     }
 
-    #[cfg(feature = "silero-vad")]
     #[test]
     fn test_compute_energy_db() {
         assert_eq!(compute_energy_db(&[]), -100.0);
