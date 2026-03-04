@@ -4,11 +4,9 @@ VTuber/PNGTuber UI or headless service for Linux.
 
 ## Features
 
-- **Few Dependencies**: Standalone PNGTuber, MediaPipe for 3d model.
+- **Few Dependencies**: Standalone PNGTuber, MediaPipe for 3D model
 - **Voice Activity Detection**: Multiple VAD backends (energy-based, Silero)
 - **OBS Integration**: WebSocket-based scene/source switching
-- **Browser Source**: Self-contained avatar page for OBS browser sources
-- **Web Dashboard**: Real-time configuration and preview
 
 ## Installation
 
@@ -26,7 +24,7 @@ pip install mediapipe opencv-python
 # Build and run (opens 3D viewport by default)
 cargo run --release
 
-# Or run headless (browser source / OBS only)
+# Or run headless (no UI window)
 cargo run --release -- --headless
 ```
 
@@ -46,7 +44,7 @@ fushigi3d --config path/to/config.toml
 fushigi3d --verbose
 
 # Disable specific features
-fushigi3d --no-obs --no-http
+fushigi3d --no-obs --no-audio
 ```
 
 ## Configuration
@@ -79,50 +77,6 @@ mode = "scene"
 idle_scene = "Idle"
 speaking_scene = "Speaking"
 ```
-
-### Browser Source
-
-Add a browser source in OBS pointing to:
-```
-http://localhost:8080/avatar
-```
-
-The avatar will update in real-time based on voice activity.
-
-## Avatar Assets
-
-Place your avatar images in the `assets/default/` directory:
-
-```
-assets/default/
-├── idle.png           # Default idle state
-├── speaking.png       # Speaking state
-└── expressions/
-    ├── happy.png
-    ├── sad.png
-    └── surprised.png
-```
-
-## Web Dashboard (partially implemented)
-
-Access the dashboard at `http://localhost:8080/`:
-
-- **Dashboard**: Real-time status and preview
-- **Settings**: Configure audio, OBS, VMC, and integrations
-- **Browser Source**: Direct link for OBS (`/avatar`)
-
-## API Endpoints (partially implemented)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/status` | GET | Current status |
-| `/api/state` | GET/POST | Avatar state |
-| `/api/expression` | POST/DELETE | Set/clear expression |
-| `/api/config` | GET/POST | Configuration |
-| `/api/audio/devices` | GET | List audio devices |
-| `/api/stream` | GET | SSE state updates |
-| `/avatar` | GET | Browser source page |
-| `/avatar/stream` | GET | SSE for avatar updates |
 
 ## Development
 
