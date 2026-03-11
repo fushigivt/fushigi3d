@@ -3,10 +3,29 @@
 //! Launches and manages Python tracker subprocesses (OpenSeeFace, MediaPipe)
 //! as child processes with automatic cleanup on drop.
 
+use std::path::PathBuf;
+
 use tokio::process::{Child, Command};
 
 use crate::config::{MediaPipeConfig, OsfConfig};
 use crate::error::{Fushigi3dError, TrackingError};
+
+/// Return the Python interpreter path, preferring a project-local venv if present.
+fn python_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    let venv = PathBuf::from(".venv/Scripts/python.exe");
+    #[cfg(not(target_os = "windows"))]
+    let venv = PathBuf::from(".venv/bin/python3");
+
+    if venv.exists() {
+        venv
+    } else {
+        #[cfg(target_os = "windows")]
+        return PathBuf::from("python");
+        #[cfg(not(target_os = "windows"))]
+        return PathBuf::from("python3");
+    }
+}
 
 /// Generic tracker subprocess manager.
 ///
@@ -89,7 +108,7 @@ pub fn osf_subprocess(config: &OsfConfig) -> TrackerSubprocess {
         name: "OpenSeeFace",
         child: None,
         build_cmd: Box::new(move || {
-            let mut cmd = Command::new("python3");
+            let mut cmd = Command::new(python_path());
             cmd.arg(&config.facetracker_path)
                 .args(["-v", "0"])
                 .args(["-s", "1"])
@@ -115,7 +134,7 @@ pub fn mp_subprocess(config: &MediaPipeConfig) -> TrackerSubprocess {
         name: "MediaPipe",
         child: None,
         build_cmd: Box::new(move || {
-            let mut cmd = Command::new("python3");
+            let mut cmd = Command::new(python_path());
             cmd.arg(&config.tracker_script)
                 .args(["--ip", &config.listen_address])
                 .args(["--port", &config.port.to_string()])
@@ -138,7 +157,7 @@ pub fn mp_subprocess(config: &MediaPipeConfig) -> TrackerSubprocess {
 ///
 /// Runs `python3 -c "import mediapipe"` and returns true if it succeeds.
 pub fn check_mediapipe_available() -> bool {
-    match std::process::Command::new("python3")
+    match std::process::Command::new(python_path())
         .args(["-c", "import mediapipe"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

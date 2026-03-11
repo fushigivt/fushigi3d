@@ -70,10 +70,30 @@ generate_png "${EXPR_DIR}/sad.png"         100 120 180
 generate_png "${EXPR_DIR}/surprised.png"   240 180 100
 generate_png "${EXPR_DIR}/angry.png"       220 100 100
 
+# Install MediaPipe
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR=".venv"
+
+echo ""
+read -rp "Install MediaPipe face tracking? [Y/n] " mp_answer
+mp_answer="${mp_answer:-y}"
+if [[ "$mp_answer" =~ ^[Yy] ]]; then
+    if ! command -v python3 &>/dev/null; then
+        echo "Warning: python3 not found, skipping MediaPipe install"
+    else
+        if [ ! -d "$VENV_DIR" ]; then
+            echo "Creating Python virtual environment in ${VENV_DIR}..."
+            python3 -m venv "$VENV_DIR"
+        fi
+        echo "Installing MediaPipe dependencies..."
+        "${VENV_DIR}/bin/pip" install --quiet -r "${SCRIPT_DIR}/requirements.txt"
+        echo "MediaPipe installed in ${VENV_DIR}"
+        echo ""
+        echo "To run the tracker manually:"
+        echo "  ${VENV_DIR}/bin/python3 scripts/mp_tracker.py"
+    fi
+fi
+
 echo ""
 echo "Setup complete! Run with:"
 echo "  cargo run --release"
-echo ""
-echo "For face tracking:"
-echo "  pip install mediapipe opencv-python"
-echo "  python3 scripts/mp_tracker.py"
