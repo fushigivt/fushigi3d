@@ -124,6 +124,16 @@ impl Default for StickersParams {
     }
 }
 
+/// PNGTuber image slot paths.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct PngSlot {
+    active: Option<String>,
+    inactive: Option<String>,
+}
+
+/// Number of PNGTuber image slots (keys 1-9, 0).
+const PNG_SLOT_COUNT: usize = 10;
+
 /// Persisted UI state saved/restored by eframe's built-in persistence.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -147,6 +157,10 @@ struct PersistedState {
     fx: FxParams,
     #[serde(default)]
     stickers: StickersParams,
+    #[serde(default)]
+    png_slots: Vec<PngSlot>,
+    #[serde(default)]
+    selected_slot: usize,
 }
 
 impl Default for PersistedState {
@@ -169,6 +183,8 @@ impl Default for PersistedState {
             selected_vad: crate::config::VadProvider::default(),
             fx: FxParams::default(),
             stickers: StickersParams::default(),
+            png_slots: Vec::new(),
+            selected_slot: 0,
         }
     }
 }
@@ -282,6 +298,8 @@ pub struct Fushigi3dApp {
     stickers: StickersParams,
     /// Active tab in the controls side panel
     controls_tab: ControlsTab,
+    png_slots: Vec<PngSlot>,
+    selected_slot: usize,
 }
 
 impl Fushigi3dApp {
@@ -413,6 +431,12 @@ impl Fushigi3dApp {
             fx: persisted.fx.clone(),
             stickers: persisted.stickers.clone(),
             controls_tab: ControlsTab::General,
+            png_slots: {
+                let mut slots = persisted.png_slots.clone();
+                slots.resize_with(PNG_SLOT_COUNT, PngSlot::default);
+                slots
+            },
+            selected_slot: persisted.selected_slot.min(PNG_SLOT_COUNT - 1),
         };
 
         // Try to load VRM model and initialize renderer
@@ -421,6 +445,24 @@ impl Fushigi3dApp {
         // If VRM failed to load, default to 2D mode
         if app.model.is_none() {
             app.view_mode = ViewMode::PngTuber2D;
+        }
+
+        // Reload persisted slot textures
+        let ctx = cc.egui_ctx.clone();
+        let slots_snapshot: Vec<_> = app.png_slots.iter().enumerate()
+            .flat_map(|(idx, slot)| {
+                let mut v = Vec::new();
+                if let Some(p) = &slot.active {
+                    v.push((format!("slot_{}_act", idx), p.clone()));
+                }
+                if let Some(p) = &slot.inactive {
+                    v.push((format!("slot_{}_idle", idx), p.clone()));
+                }
+                v
+            })
+            .collect();
+        for (key, path) in &slots_snapshot {
+            app.load_slot_texture(&ctx, key, path);
         }
 
         app
@@ -663,18 +705,77 @@ impl Fushigi3dApp {
 
     /// Render the 2D PNGTuber sprite in the given UI region.
     fn show_pngtuber_panel(&mut self, ui: &mut egui::Ui) {
+        let idx = self.selected_slot;
+        let is_speaking = self.cached_avatar.is_speaking();
+
+        let active_path = self.png_slots[idx].active.clone();
+        let inactive_path = self.png_slots[idx].inactive.clone();
+
+        let (primary, fallback) = if is_speaking {
+            ("act", "idle")
+        } else {
+            ("idle", "act")
+        };
+        let primary_key = format!("slot_{}_{}", idx, primary);
+        let fallback_key = format!("slot_{}_{}", idx, fallback);
+        let primary_path = if primary == "act" { &active_path } else { &inactive_path };
+        let fallback_path = if fallback == "act" { &active_path } else { &inactive_path };
+
+        let tex_key = if let Some(p) = primary_path {
+            if !self.png_textures.contains_key(&primary_key) {
+                self.load_slot_texture(ui.ctx(), &primary_key, p);
+            }
+            Some(primary_key)
+        } else if let Some(p) = fallback_path {
+            if !self.png_textures.contains_key(&fallback_key) {
+                self.load_slot_texture(ui.ctx(), &fallback_key, p);
+            }
+            Some(fallback_key)
+        } else {
+            None
+        };
+
+        match tex_key.and_then(|k| self.png_textures.get(&k)) {
+            Some(texture) => {
+                let available = ui.available_size();
+                ui.centered_and_justified(|ui| {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(available)
+                            .maintain_aspect_ratio(true),
+                    );
+                });
+            }
+            None => self.show_pngtuber_default(ui),
+        }
+    }
+
+    /// Load an image file into the texture cache under the given key.
+    fn load_slot_texture(&mut self, ctx: &egui::Context, key: &str, path: &str) {
+        if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let pixels = rgba.into_raw();
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+                let texture = ctx.load_texture(key, color_image, egui::TextureOptions::LINEAR);
+                self.png_textures.insert(key.to_string(), texture);
+            }
+        }
+    }
+
+    /// Default asset-key-based PNGTuber renderer (used when no slot images are assigned).
+    fn show_pngtuber_default(&mut self, ui: &mut egui::Ui) {
         let asset_manager = match &self.asset_manager {
             Some(am) => am,
             None => {
-                ui.colored_label(self.theme.red, "No assets loaded");
+                ui.colored_label(self.theme.red, "Assign images to slots in the panel");
                 return;
             }
         };
 
-        // Determine which sprite to show
         let key = self.cached_avatar.asset_key();
 
-        // Fallback chain: exact key → strip "_speaking" suffix → "idle"
         let resolved_key = if asset_manager.has_asset(&key) {
             key.clone()
         } else if key.ends_with("_speaking") {
@@ -692,7 +793,6 @@ impl Fushigi3dApp {
             key.clone()
         };
 
-        // Load texture on first use
         if !self.png_textures.contains_key(&resolved_key) {
             match asset_manager.get_data(&resolved_key) {
                 Ok(bytes) => match image::load_from_memory(&bytes) {
@@ -711,7 +811,7 @@ impl Fushigi3dApp {
                     Err(e) => {
                         ui.colored_label(
                             self.theme.red,
-                            format!("Failed to decode image '{}': {}", resolved_key, e),
+                            format!("Failed to decode '{}': {}", resolved_key, e),
                         );
                         return;
                     }
@@ -719,7 +819,7 @@ impl Fushigi3dApp {
                 Err(e) => {
                     ui.colored_label(
                         self.theme.red,
-                        format!("Failed to load asset '{}': {}", resolved_key, e),
+                        format!("Failed to load '{}': {}", resolved_key, e),
                     );
                     return;
                 }
@@ -940,6 +1040,8 @@ impl eframe::App for Fushigi3dApp {
             selected_vad: self.selected_vad,
             fx: self.fx.clone(),
             stickers: self.stickers.clone(),
+            png_slots: self.png_slots.clone(),
+            selected_slot: self.selected_slot,
         };
         eframe::set_value(storage, STORAGE_KEY, &persisted);
     }
@@ -1000,47 +1102,39 @@ impl eframe::App for Fushigi3dApp {
             }
         }
 
-        if self.state.config.blocking_read().activation
-            == crate::config::ActivationMode::Key
-        {
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
-                let rt = tokio::runtime::Handle::current();
-                let current = rt.block_on(self.state.get_avatar_state());
-                let speaking = !current.is_speaking();
-                let new_state = current.with_speaking(speaking);
-                rt.block_on(self.state.update_avatar_state(new_state));
+        // PNGTuber keyboard shortcuts
+        if self.view_mode == ViewMode::PngTuber2D {
+            let is_key_mode = self.state.config.blocking_read().activation
+                == crate::config::ActivationMode::Key;
+
+            if is_key_mode {
+                let toggle = ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::A)
+                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+                });
+                if toggle {
+                    let rt = tokio::runtime::Handle::current();
+                    let current = rt.block_on(self.state.get_avatar_state());
+                    let speaking = !current.is_speaking();
+                    rt.block_on(self.state.update_avatar_state(current.with_speaking(speaking)));
+                }
             }
 
             let digit_keys = [
-                egui::Key::Num0,
-                egui::Key::Num1,
-                egui::Key::Num2,
-                egui::Key::Num3,
-                egui::Key::Num4,
-                egui::Key::Num5,
-                egui::Key::Num6,
-                egui::Key::Num7,
-                egui::Key::Num8,
-                egui::Key::Num9,
+                (egui::Key::Num1, 1),
+                (egui::Key::Num2, 2),
+                (egui::Key::Num3, 3),
+                (egui::Key::Num4, 4),
+                (egui::Key::Num5, 5),
+                (egui::Key::Num6, 6),
+                (egui::Key::Num7, 7),
+                (egui::Key::Num8, 8),
+                (egui::Key::Num9, 9),
+                (egui::Key::Num0, 0),
             ];
-            for (i, key) in digit_keys.iter().enumerate() {
-                if ctx.input_mut(|i_state| {
-                    i_state.consume_key(egui::Modifiers::NONE, *key)
-                }) {
-                    let rt = tokio::runtime::Handle::current();
-                    let config = rt.block_on(self.state.config.read());
-                    let expr = if i == 0 {
-                        None
-                    } else {
-                        let mut names: Vec<&String> =
-                            config.avatar.expressions.keys().collect();
-                        names.sort();
-                        names.get(i - 1).map(|s| (*s).clone())
-                    };
-                    drop(config);
-                    let current = rt.block_on(self.state.get_avatar_state());
-                    let new_state = current.with_expression(expr);
-                    rt.block_on(self.state.update_avatar_state(new_state));
+            for (key, idx) in &digit_keys {
+                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, *key)) {
+                    self.selected_slot = *idx;
                 }
             }
         }
@@ -1154,14 +1248,147 @@ impl eframe::App for Fushigi3dApp {
 
             ui.separator();
 
-            let activation = self.state.config.blocking_read().activation;
+            let mut activation = self.state.config.blocking_read().activation;
             ui.horizontal(|ui| {
                 ui.label("Activation:");
-                match activation {
-                    crate::config::ActivationMode::Audio => ui.label("Audio (VAD)"),
-                    crate::config::ActivationMode::Key => ui.label("Key (Space)"),
-                };
+                let prev = activation;
+                ui.selectable_value(
+                    &mut activation,
+                    crate::config::ActivationMode::Key,
+                    "Key",
+                );
+                ui.selectable_value(
+                    &mut activation,
+                    crate::config::ActivationMode::Audio,
+                    "Audio",
+                );
+                if activation != prev {
+                    let state = self.state.clone();
+                    let new_mode = activation;
+                    let rt = tokio::runtime::Handle::current();
+                    rt.spawn(async move {
+                        let mut config = state.config.write().await;
+                        config.activation = new_mode;
+                        if new_mode == crate::config::ActivationMode::Key {
+                            config.audio.enabled = false;
+                        } else {
+                            config.audio.enabled = true;
+                            drop(config);
+                            state.signal_audio_restart();
+                        }
+                    });
+                }
             });
+
+            if self.view_mode == ViewMode::PngTuber2D {
+            // Active toggle (A key)
+            let is_speaking = self.cached_avatar.is_speaking();
+            let active_text = if is_speaking { "Active [A]" } else { "Inactive [A]" };
+            let active_btn = egui::Button::new(active_text)
+                .fill(if is_speaking { theme.green } else { theme.surface0 });
+            if ui.add(active_btn).clicked()
+                && activation == crate::config::ActivationMode::Key
+            {
+                let rt = tokio::runtime::Handle::current();
+                let current = rt.block_on(self.state.get_avatar_state());
+                let speaking = !current.is_speaking();
+                rt.block_on(self.state.update_avatar_state(current.with_speaking(speaking)));
+            }
+
+            ui.separator();
+            ui.label("Slots");
+            let thumb = egui::vec2(28.0, 28.0);
+            // Keyboard order: 1,2,...,9,0
+            let slot_order: [usize; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+            for &idx in &slot_order {
+                let selected = self.selected_slot == idx;
+                let resp = ui.horizontal(|ui| {
+                    let label = egui::RichText::new(format!("{}", idx)).strong();
+                    if selected {
+                        ui.colored_label(theme.blue, label);
+                    } else {
+                        ui.label(label);
+                    }
+
+                    let act_key = format!("slot_{}_act", idx);
+                    let idle_key = format!("slot_{}_idle", idx);
+
+                    // Active thumbnail
+                    if let Some(tex) = self.png_textures.get(&act_key) {
+                        if ui.add(egui::ImageButton::new(
+                            egui::Image::new(tex).fit_to_exact_size(thumb),
+                        )).on_hover_text("Active (click to change)").clicked() {
+                            return Some((idx, true));
+                        }
+                    } else {
+                        let btn = egui::Button::new("act")
+                            .fill(theme.green.linear_multiply(0.3))
+                            .min_size(thumb);
+                        if ui.add(btn).on_hover_text("Set active image").clicked() {
+                            return Some((idx, true));
+                        }
+                    }
+
+                    // Inactive thumbnail
+                    if let Some(tex) = self.png_textures.get(&idle_key) {
+                        if ui.add(egui::ImageButton::new(
+                            egui::Image::new(tex).fit_to_exact_size(thumb),
+                        )).on_hover_text("Inactive (click to change)").clicked() {
+                            return Some((idx, false));
+                        }
+                    } else {
+                        let btn = egui::Button::new("idle")
+                            .fill(theme.surface1)
+                            .min_size(thumb);
+                        if ui.add(btn).on_hover_text("Set inactive image").clicked() {
+                            return Some((idx, false));
+                        }
+                    }
+
+                    None
+                });
+
+                // Clicking the row background selects the slot
+                if ui.interact(
+                    resp.response.rect,
+                    egui::Id::new(("slot_bg", idx)),
+                    egui::Sense::click(),
+                ).clicked() {
+                    self.selected_slot = idx;
+                }
+
+                // Handle image picker click
+                if let Some((slot_idx, is_active)) = resp.inner {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif"])
+                        .pick_file()
+                    {
+                        let path_str = path.display().to_string();
+                        let key = format!("slot_{}_{}", slot_idx, if is_active { "act" } else { "idle" });
+                        if let Ok(bytes) = std::fs::read(&path) {
+                            if let Ok(img) = image::load_from_memory(&bytes) {
+                                let rgba = img.to_rgba8();
+                                let size = [rgba.width() as usize, rgba.height() as usize];
+                                let pixels = rgba.into_raw();
+                                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+                                let texture = ui.ctx().load_texture(
+                                    &key,
+                                    color_image,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                self.png_textures.insert(key, texture);
+                                let slot = &mut self.png_slots[slot_idx];
+                                if is_active {
+                                    slot.active = Some(path_str);
+                                } else {
+                                    slot.inactive = Some(path_str);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            }
 
             if activation == crate::config::ActivationMode::Audio {
             // Audio input device picker
@@ -1258,16 +1485,6 @@ impl eframe::App for Fushigi3dApp {
                 ui.label(format!("Body landmarks: {}", avatar.body_landmarks().len()));
             }
             }
-
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Speaking:");
-                if avatar.is_speaking() {
-                    ui.colored_label(theme.green, "yes");
-                } else {
-                    ui.label("no");
-                }
-            });
 
             // Audio meter
             if activation == crate::config::ActivationMode::Audio {
