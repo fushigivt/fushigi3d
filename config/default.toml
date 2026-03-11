@@ -1,6 +1,8 @@
 # Fushigi3D Default Configuration
 # Copy this file to config.toml and modify as needed
 
+activation = "key"
+
 [audio]
 # Enable audio capture and VAD
 enabled = true

@@ -50,6 +50,10 @@ struct Args {
     #[arg(long)]
     no_audio: bool,
 
+    /// Png audio/key toggle
+    #[arg(long)]
+    key_mode: bool,
+
     /// Run in headless mode (no UI window)
     #[arg(long)]
     headless: bool,
@@ -148,6 +152,10 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
         config.obs.enabled = false;
     }
     if args.no_audio {
+        config.audio.enabled = false;
+    }
+    if args.key_mode {
+        config.activation = fushigi3d::config::ActivationMode::Key;
         config.audio.enabled = false;
     }
     // Validate configuration

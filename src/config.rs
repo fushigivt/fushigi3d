@@ -6,10 +6,25 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{ConfigError, Fushigi3dError};
 
+/// How the PNGTuber speaking state is driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivationMode {
+    Audio,
+    Key,
+}
+
+impl Default for ActivationMode {
+    fn default() -> Self {
+        Self::Key
+    }
+}
+
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub activation: ActivationMode,
     pub audio: AudioConfig,
     pub vad: VadConfig,
     pub avatar: AvatarConfig,
@@ -22,6 +37,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            activation: ActivationMode::default(),
             audio: AudioConfig::default(),
             vad: VadConfig::default(),
             avatar: AvatarConfig::default(),

@@ -1000,6 +1000,51 @@ impl eframe::App for Fushigi3dApp {
             }
         }
 
+        if self.state.config.blocking_read().activation
+            == crate::config::ActivationMode::Key
+        {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+                let rt = tokio::runtime::Handle::current();
+                let current = rt.block_on(self.state.get_avatar_state());
+                let speaking = !current.is_speaking();
+                let new_state = current.with_speaking(speaking);
+                rt.block_on(self.state.update_avatar_state(new_state));
+            }
+
+            let digit_keys = [
+                egui::Key::Num0,
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ];
+            for (i, key) in digit_keys.iter().enumerate() {
+                if ctx.input_mut(|i_state| {
+                    i_state.consume_key(egui::Modifiers::NONE, *key)
+                }) {
+                    let rt = tokio::runtime::Handle::current();
+                    let config = rt.block_on(self.state.config.read());
+                    let expr = if i == 0 {
+                        None
+                    } else {
+                        let mut names: Vec<&String> =
+                            config.avatar.expressions.keys().collect();
+                        names.sort();
+                        names.get(i - 1).map(|s| (*s).clone())
+                    };
+                    drop(config);
+                    let current = rt.block_on(self.state.get_avatar_state());
+                    let new_state = current.with_expression(expr);
+                    rt.block_on(self.state.update_avatar_state(new_state));
+                }
+            }
+        }
+
         // In overlay mode, make the entire background transparent
         if self.overlay_mode {
             let mut visuals = ctx.style().visuals.clone();
@@ -1049,6 +1094,7 @@ impl eframe::App for Fushigi3dApp {
             });
 
             // Model picker
+            if self.view_mode == ViewMode::Vrm3D {
             ui.label("Model");
             if !self.available_models.is_empty() {
                 let prev_model = self.selected_model.clone();
@@ -1077,6 +1123,7 @@ impl eframe::App for Fushigi3dApp {
                 }
             }
             ui.separator();
+            }
 
             if self.view_mode == ViewMode::Vrm3D {
                 ui.horizontal(|ui| {
@@ -1107,6 +1154,16 @@ impl eframe::App for Fushigi3dApp {
 
             ui.separator();
 
+            let activation = self.state.config.blocking_read().activation;
+            ui.horizontal(|ui| {
+                ui.label("Activation:");
+                match activation {
+                    crate::config::ActivationMode::Audio => ui.label("Audio (VAD)"),
+                    crate::config::ActivationMode::Key => ui.label("Key (Space)"),
+                };
+            });
+
+            if activation == crate::config::ActivationMode::Audio {
             // Audio input device picker
             ui.label("Audio Input");
             let prev_device = self.selected_device.clone();
@@ -1149,6 +1206,7 @@ impl eframe::App for Fushigi3dApp {
                     state.signal_audio_restart();
                 });
             }
+            }
 
             ui.separator();
 
@@ -1183,6 +1241,7 @@ impl eframe::App for Fushigi3dApp {
             // Avatar state info
             let avatar = &self.cached_avatar;
             ui.label(format!("State: {}", avatar.state_type()));
+            if self.view_mode == ViewMode::Vrm3D {
             ui.label(format!("Mouth: {:.2}", avatar.mouth_open()));
             ui.label(format!("Blink: {:.2}", avatar.blink()));
             ui.label(format!(
@@ -1198,15 +1257,23 @@ impl eframe::App for Fushigi3dApp {
             if avatar.has_body_tracking() {
                 ui.label(format!("Body landmarks: {}", avatar.body_landmarks().len()));
             }
+            }
 
             ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Speaking:");
+                if avatar.is_speaking() {
+                    ui.colored_label(theme.green, "yes");
+                } else {
+                    ui.label("no");
+                }
+            });
 
             // Audio meter
+            if activation == crate::config::ActivationMode::Audio {
             let energy_db = self.state.get_audio_energy_db();
             let vad_conf = self.state.get_audio_vad_confidence();
-            ui.label("Audio");
             ui.label(format!("Energy: {:.1} dB", energy_db));
-            // Map dB to 0.0–1.0 for the bar: -100 dB → 0.0, 0 dB → 1.0
             let level_frac = ((energy_db + 100.0) / 100.0).clamp(0.0, 1.0);
             let bar_color = if avatar.is_speaking() {
                 theme.green
@@ -1229,14 +1296,9 @@ impl eframe::App for Fushigi3dApp {
             );
             ui.painter().rect_filled(filled, 2.0, bar_color);
             ui.label(format!("VAD: {:.0}%", vad_conf * 100.0));
-            ui.horizontal(|ui| {
-                ui.label("Speaking:");
-                if avatar.is_speaking() {
-                    ui.colored_label(theme.green, "yes");
-                } else {
-                    ui.label("no");
-                }
-            });
+            }
+
+            if self.view_mode == ViewMode::Vrm3D {
 
             ui.separator();
 
@@ -1354,6 +1416,8 @@ impl eframe::App for Fushigi3dApp {
                     );
                 }
                 _ => {}
+            }
+
             }
 
             // In 2D mode, show the current asset key
