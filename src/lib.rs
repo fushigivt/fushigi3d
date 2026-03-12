@@ -50,6 +50,7 @@ pub struct AppState {
     pub audio_energy_db: AtomicU32,
     /// VAD confidence (0.0–1.0, stored as f32 bits in AtomicU32)
     pub audio_vad_confidence: AtomicU32,
+    pub key_speaking: AtomicBool,
 }
 
 impl AppState {
@@ -72,6 +73,7 @@ impl AppState {
             audio_restart: Notify::new(),
             audio_energy_db: AtomicU32::new(f32::to_bits(-100.0)),
             audio_vad_confidence: AtomicU32::new(f32::to_bits(0.0)),
+            key_speaking: AtomicBool::new(false),
         })
     }
 

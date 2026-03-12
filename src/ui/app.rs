@@ -1108,15 +1108,16 @@ impl eframe::App for Fushigi3dApp {
                 == crate::config::ActivationMode::Key;
 
             if is_key_mode {
-                let toggle = ctx.input_mut(|i| {
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::A)
-                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+                let held = ctx.input(|i| {
+                    i.key_down(egui::Key::A) || i.key_down(egui::Key::Space)
                 });
-                if toggle {
+                if held != self.cached_avatar.is_speaking() {
+                    self.state.key_speaking.store(held, std::sync::atomic::Ordering::Relaxed);
                     let rt = tokio::runtime::Handle::current();
                     let current = rt.block_on(self.state.get_avatar_state());
-                    let speaking = !current.is_speaking();
-                    rt.block_on(self.state.update_avatar_state(current.with_speaking(speaking)));
+                    let new_state = current.with_speaking(held);
+                    self.cached_avatar = new_state.clone();
+                    rt.block_on(self.state.update_avatar_state(new_state));
                 }
             }
 
@@ -1281,19 +1282,12 @@ impl eframe::App for Fushigi3dApp {
             });
 
             if self.view_mode == ViewMode::PngTuber2D {
-            // Active toggle (A key)
+            // Speaking indicator
             let is_speaking = self.cached_avatar.is_speaking();
-            let active_text = if is_speaking { "Active [A]" } else { "Inactive [A]" };
-            let active_btn = egui::Button::new(active_text)
+            let active_text = if is_speaking { "Speaking [hold A]" } else { "Idle [hold A]" };
+            let active_label = egui::Button::new(active_text)
                 .fill(if is_speaking { theme.green } else { theme.surface0 });
-            if ui.add(active_btn).clicked()
-                && activation == crate::config::ActivationMode::Key
-            {
-                let rt = tokio::runtime::Handle::current();
-                let current = rt.block_on(self.state.get_avatar_state());
-                let speaking = !current.is_speaking();
-                rt.block_on(self.state.update_avatar_state(current.with_speaking(speaking)));
-            }
+            ui.add(active_label).on_hover_text("Hold A or Space to speak");
 
             ui.separator();
             ui.label("Slots");
@@ -1347,6 +1341,21 @@ impl eframe::App for Fushigi3dApp {
 
                     None
                 });
+
+                // Paint highlight behind selected row
+                if selected {
+                    ui.painter().rect_filled(
+                        resp.response.rect.expand(2.0),
+                        4.0,
+                        theme.blue.linear_multiply(0.15),
+                    );
+                    ui.painter().rect_stroke(
+                        resp.response.rect.expand(2.0),
+                        4.0,
+                        egui::Stroke::new(1.0, theme.blue),
+                        egui::StrokeKind::Outside,
+                    );
+                }
 
                 // Clicking the row background selects the slot
                 if ui.interact(
@@ -1435,6 +1444,7 @@ impl eframe::App for Fushigi3dApp {
             }
             }
 
+            if self.view_mode == ViewMode::Vrm3D {
             ui.separator();
 
             // OBS status
@@ -1468,7 +1478,6 @@ impl eframe::App for Fushigi3dApp {
             // Avatar state info
             let avatar = &self.cached_avatar;
             ui.label(format!("State: {}", avatar.state_type()));
-            if self.view_mode == ViewMode::Vrm3D {
             ui.label(format!("Mouth: {:.2}", avatar.mouth_open()));
             ui.label(format!("Blink: {:.2}", avatar.blink()));
             ui.label(format!(
@@ -1492,7 +1501,7 @@ impl eframe::App for Fushigi3dApp {
             let vad_conf = self.state.get_audio_vad_confidence();
             ui.label(format!("Energy: {:.1} dB", energy_db));
             let level_frac = ((energy_db + 100.0) / 100.0).clamp(0.0, 1.0);
-            let bar_color = if avatar.is_speaking() {
+            let bar_color = if self.cached_avatar.is_speaking() {
                 theme.green
             } else {
                 theme.blue
@@ -1635,12 +1644,6 @@ impl eframe::App for Fushigi3dApp {
                 _ => {}
             }
 
-            }
-
-            // In 2D mode, show the current asset key
-            if self.view_mode == ViewMode::PngTuber2D {
-                ui.separator();
-                ui.label(format!("Sprite: {}", self.cached_avatar.asset_key()));
             }
 
             ui.separator();

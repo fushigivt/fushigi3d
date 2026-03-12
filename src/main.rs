@@ -319,6 +319,12 @@ async fn run_audio_pipeline(state: Arc<AppState>) -> anyhow::Result<()> {
                             let activity = pipeline.get_activity();
                             state.set_audio_levels(activity.energy_db, activity.confidence);
 
+                            if state.config.read().await.activation
+                                == fushigi3d::config::ActivationMode::Key
+                            {
+                                continue;
+                            }
+
                             let current = state.get_avatar_state().await;
                             // Only update if speaking state changed
                             if is_speaking != current.is_speaking() {
@@ -498,7 +504,13 @@ async fn run_tracking_loop(
         tokio::select! {
             result = receiver.process(&current) => {
                 match result {
-                    Ok(Some(new_state)) => {
+                    Ok(Some(mut new_state)) => {
+                        if state.config.read().await.activation
+                            == fushigi3d::config::ActivationMode::Key
+                        {
+                            let ks = state.key_speaking.load(std::sync::atomic::Ordering::Relaxed);
+                            new_state = new_state.with_speaking(ks);
+                        }
                         if new_state != current {
                             state.update_avatar_state(new_state).await;
                         }
