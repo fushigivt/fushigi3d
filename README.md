@@ -1,6 +1,6 @@
 # Fushigi3D
 
-VTuber/PNGTuber UI for Linux (untested on Mac/Windows).
+VTuber/PNGTuber UI for Linux (untested on Mac).
 
 ## Features
 
