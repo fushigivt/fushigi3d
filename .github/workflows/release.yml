@@ -110,14 +110,8 @@ jobs:
 
             **Linux / macOS:**
             ```sh
-            python3 -m venv .env
-            .venv/bin/pip install -r requirements.txt
-            ```
-
-            **Windows:**
-            ```powershell
-            python -m venv .env
-            .venv\Scripts\pip install -r requirements.txt
+            python3 -m venv .venv
+            .venv/bin/pip install  mediapipe opencv numpy
             ```
 
             The app auto-detects a `.venv` in the working directory.
