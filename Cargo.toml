@@ -15,7 +15,7 @@ fushigi3d-fx = { path = "crates/fushigi3d-fx" }
 signal-smooth = "0.1.0"
 
 # Audio & VAD
-cpal = "0.15"
+cpal = { version = "0.15", optional = true }
 voice_activity_detector = { version = "0.2", optional = true }
 
 # OBS WebSocket
@@ -87,8 +87,8 @@ features = ["wgpu", "persistence", "x11", "wayland"]
 tempfile = "3"
 
 [features]
-default = ["silero-vad", "native-ui", "alsa-audio"]
-alsa-audio = ["dep:alsa", "dep:rubato"]
+default = ["silero-vad", "native-ui"]
+alsa-audio = ["dep:alsa", "dep:rubato", "dep:cpal"]
 silero-vad = ["dep:voice_activity_detector"]
 native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer", "rfd"]
 

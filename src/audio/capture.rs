@@ -311,7 +311,8 @@ mod platform {
 
 pub use platform::AudioCapture;
 
-/// List all available input devices (cross-platform via cpal).
+/// List all available input devices (requires alsa-audio feature on Linux).
+#[cfg(feature = "alsa-audio")]
 pub fn list_input_devices() -> Vec<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
@@ -326,10 +327,21 @@ pub fn list_input_devices() -> Vec<String> {
     devices
 }
 
+#[cfg(not(feature = "alsa-audio"))]
+pub fn list_input_devices() -> Vec<String> {
+    Vec::new()
+}
+
 /// Get the default input device name.
+#[cfg(feature = "alsa-audio")]
 pub fn default_input_device_name() -> Option<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
     host.default_input_device()
         .and_then(|d| d.name().ok())
+}
+
+#[cfg(not(feature = "alsa-audio"))]
+pub fn default_input_device_name() -> Option<String> {
+    None
 }

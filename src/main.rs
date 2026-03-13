@@ -268,6 +268,7 @@ async fn setup_and_spawn_services(args: &Args) -> anyhow::Result<Arc<AppState>> 
     Ok(state)
 }
 
+#[cfg(feature = "alsa-audio")]
 fn list_audio_devices() {
     use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -288,6 +289,11 @@ fn list_audio_devices() {
             }
         }
     }
+}
+
+#[cfg(not(feature = "alsa-audio"))]
+fn list_audio_devices() {
+    println!("Audio device listing requires the alsa-audio feature (build from source with --features alsa-audio)");
 }
 
 async fn run_audio_pipeline(state: Arc<AppState>) -> anyhow::Result<()> {

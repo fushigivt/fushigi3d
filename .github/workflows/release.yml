@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libgtk-3-dev
+          sudo apt-get install -y libgtk-3-dev
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
           fi
@@ -60,13 +60,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: |
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            cargo build --release --target ${{ matrix.target }} --no-default-features --features silero-vad,native-ui
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
-        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package release (unix)
         if: runner.os != 'Windows'
