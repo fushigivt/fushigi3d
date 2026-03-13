@@ -300,6 +300,8 @@ pub struct Fushigi3dApp {
     controls_tab: ControlsTab,
     png_slots: Vec<PngSlot>,
     selected_slot: usize,
+    file_pick_rx: std::sync::mpsc::Receiver<(usize, bool, std::path::PathBuf)>,
+    file_pick_tx: std::sync::mpsc::Sender<(usize, bool, std::path::PathBuf)>,
 }
 
 impl Fushigi3dApp {
@@ -391,6 +393,8 @@ impl Fushigi3dApp {
         let mode = SmoothingMode::from_str(&tuning.smoothing_mode);
         let smoother = TrackingSmoother::new(mode, &tuning);
 
+        let (file_pick_tx, file_pick_rx) = std::sync::mpsc::channel();
+
         let mut app = Self {
             state,
             state_rx,
@@ -437,6 +441,8 @@ impl Fushigi3dApp {
                 slots
             },
             selected_slot: persisted.selected_slot.min(PNG_SLOT_COUNT - 1),
+            file_pick_rx,
+            file_pick_tx,
         };
 
         // Try to load VRM model and initialize renderer
@@ -1054,6 +1060,27 @@ impl eframe::App for Fushigi3dApp {
         // Drain latest state from broadcast channel
         self.update_cached_state();
 
+        while let Ok((slot_idx, is_active, path)) = self.file_pick_rx.try_recv() {
+            let path_str = path.display().to_string();
+            let key = format!("slot_{}_{}", slot_idx, if is_active { "act" } else { "idle" });
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(img) = image::load_from_memory(&bytes) {
+                    let rgba = img.to_rgba8();
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    let pixels = rgba.into_raw();
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+                    let texture = ctx.load_texture(&key, color_image, egui::TextureOptions::LINEAR);
+                    self.png_textures.insert(key, texture);
+                    let slot = &mut self.png_slots[slot_idx];
+                    if is_active {
+                        slot.active = Some(path_str);
+                    } else {
+                        slot.inactive = Some(path_str);
+                    }
+                }
+            }
+        }
+
         // Handle drag-and-drop VRM/GLB import
         let dropped: Vec<_> = ctx.input(|i| i.raw.dropped_files.clone());
         for file in dropped {
@@ -1357,44 +1384,19 @@ impl eframe::App for Fushigi3dApp {
                     );
                 }
 
-                // Clicking the row background selects the slot
-                if ui.interact(
-                    resp.response.rect,
-                    egui::Id::new(("slot_bg", idx)),
-                    egui::Sense::click(),
-                ).clicked() {
-                    self.selected_slot = idx;
-                }
-
-                // Handle image picker click
+                // Handle image picker click — spawn async file dialog
                 if let Some((slot_idx, is_active)) = resp.inner {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif"])
-                        .pick_file()
-                    {
-                        let path_str = path.display().to_string();
-                        let key = format!("slot_{}_{}", slot_idx, if is_active { "act" } else { "idle" });
-                        if let Ok(bytes) = std::fs::read(&path) {
-                            if let Ok(img) = image::load_from_memory(&bytes) {
-                                let rgba = img.to_rgba8();
-                                let size = [rgba.width() as usize, rgba.height() as usize];
-                                let pixels = rgba.into_raw();
-                                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-                                let texture = ui.ctx().load_texture(
-                                    &key,
-                                    color_image,
-                                    egui::TextureOptions::LINEAR,
-                                );
-                                self.png_textures.insert(key, texture);
-                                let slot = &mut self.png_slots[slot_idx];
-                                if is_active {
-                                    slot.active = Some(path_str);
-                                } else {
-                                    slot.inactive = Some(path_str);
-                                }
-                            }
+                    let tx = self.file_pick_tx.clone();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif"])
+                            .pick_file()
+                        {
+                            let _ = tx.send((slot_idx, is_active, path));
+                            ctx.request_repaint();
                         }
-                    }
+                    });
                 }
             }
             }
