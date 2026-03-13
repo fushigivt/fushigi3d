@@ -1,36 +1,47 @@
 # Fushigi3D
 
-VTuber/PNGTuber UI or headless service for Linux.
+VTuber/PNGTuber UI for Linux (untested on Mac/Windows).
 
 ## Features
 
-- **Few Dependencies**: Standalone PNGTuber, MediaPipe for 3D model
+- **Few Dependencies**: MediaPipe for 3D model (pngtuber works standalone)
 - **Voice Activity Detection**: Multiple VAD backends (energy-based, Silero)
-- **OBS Integration**: WebSocket-based scene/source switching
 
 ## Installation
+
+Install mediapipe and opencv first, in the application directory.
+
+```bash
+# Install mediapipe and opencv locally
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### From github release
+Download the tar or zip.
+
+Once you have mediapipe installed run:
+
+./fushigi3d
+
+
+### From source (requires rust toolchain)
 
 ```bash
 # Clone the repository
 git clone https://github.com/fushigivt/fushigi3d.git
 cd fushigi3d
 
-# Download free VRM models and placeholder sprites
-./scripts/setup.sh
-
-# install mediapipe and opencv 
-pip install mediapipe opencv-python
-
 # Build and run (opens 3D viewport by default)
 cargo run --release
-
-# Or run headless (no UI window)
-cargo run --release -- --headless
 ```
 
 ## Usage
 
 ```bash
+# Run
+fushigi3d
+
 # List available audio devices
 fushigi3d --list-devices
 
