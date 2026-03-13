@@ -6,7 +6,7 @@
 //! On other platforms, audio capture is not yet implemented — the module
 //! compiles but `AudioCapture::new` returns an error.
 
-#[cfg(feature = "alsa-audio")]
+#[cfg(all(target_os = "linux", feature = "alsa-audio"))]
 mod platform {
     use alsa::pcm::{Access, Format, HwParams, PCM};
     use alsa::{Direction, ValueOr};
@@ -283,7 +283,7 @@ mod platform {
 }
 
 
-#[cfg(not(feature = "alsa-audio"))]
+#[cfg(not(all(target_os = "linux", feature = "alsa-audio")))]
 mod platform {
     use crate::config::AudioConfig;
     use crate::error::{AudioError, Fushigi3dError};
