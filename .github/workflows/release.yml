@@ -60,7 +60,13 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cargo build --release --target ${{ matrix.target }} --no-default-features --features silero-vad,native-ui
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
 
       - name: Package release (unix)
         if: runner.os != 'Windows'

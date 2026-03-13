@@ -74,8 +74,8 @@ uuid = { version = "1", features = ["v4"] }
 
 # Linux-only: ALSA audio capture + resampler, eframe with X11/Wayland
 [target.'cfg(target_os = "linux")'.dependencies]
-alsa = "0.9"
-rubato = "0.16"
+alsa = { version = "0.9", optional = true }
+rubato = { version = "0.16", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies.eframe]
 version = "0.31"
@@ -87,7 +87,8 @@ features = ["wgpu", "persistence", "x11", "wayland"]
 tempfile = "3"
 
 [features]
-default = ["silero-vad", "native-ui"]
+default = ["silero-vad", "native-ui", "alsa-audio"]
+alsa-audio = ["dep:alsa", "dep:rubato"]
 silero-vad = ["dep:voice_activity_detector"]
 native-ui = ["eframe", "egui_extras", "gltf", "glam", "bytemuck", "catppuccin-egui", "easer", "rfd"]
 
