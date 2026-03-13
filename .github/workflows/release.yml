@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+
+      - name: Configure cross-compilation linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package release (unix)
+        if: runner.os != 'Windows'
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          ARCHIVE="fushigi3d-${TAG}-${{ matrix.target }}"
+          mkdir -p "${ARCHIVE}"
+          cp target/${{ matrix.target }}/release/fushigi3d "${ARCHIVE}/"
+          cp scripts/mp_tracker.py "${ARCHIVE}/"
+          cp scripts/requirements.txt "${ARCHIVE}/"
+          cp scripts/setup.sh "${ARCHIVE}/"
+          cp config/default.toml "${ARCHIVE}/"
+          cp LICENSE* "${ARCHIVE}/" 2>/dev/null || true
+          cp README* "${ARCHIVE}/" 2>/dev/null || true
+          tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
+          echo "ARCHIVE=${ARCHIVE}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package release (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $archive = "fushigi3d-${tag}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $archive
+          Copy-Item "target/${{ matrix.target }}/release/fushigi3d.exe" $archive/
+          Copy-Item "scripts/mp_tracker.py" $archive/
+          Copy-Item "scripts/requirements.txt" $archive/
+          Copy-Item "config/default.toml" $archive/
+          Copy-Item "LICENSE*" $archive/ -ErrorAction SilentlyContinue
+          Copy-Item "README*" $archive/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path $archive -DestinationPath "${archive}.zip"
+          echo "ARCHIVE=${archive}.zip" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fushigi3d-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Platform support
+
+            Audio capture (voice activity detection) is only available on Linux, and is experimental.
+            NOTE: Mac and Windows have not been tested.
+
+            ### MediaPipe setup
+
+            The bundled `mp_tracker.py` requires Python 3.9+ with MediaPipe and OpenCV.
+
+            **Linux / macOS:**
+            ```sh
+            python3 -m venv .env
+            .venv/bin/pip install -r requirements.txt
+            ```
+
+            **Windows:**
+            ```powershell
+            python -m venv .env
+            .venv\Scripts\pip install -r requirements.txt
+            ```
+
+            The app auto-detects a `.venv` in the working directory.
+          files: |
+            *.tar.gz
+            *.zip

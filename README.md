@@ -13,8 +13,8 @@ Install mediapipe and opencv first, in the application directory.
 
 ```bash
 # Install mediapipe and opencv locally
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python3 -m venv .venv # or virtualenv .venv
+.venv/bin/pip install mediapipe opencv numpy 
 ```
 
 ### From github release

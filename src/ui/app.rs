@@ -1189,6 +1189,14 @@ impl eframe::App for Fushigi3dApp {
 
         if self.show_controls {
         egui::SidePanel::left("controls").show(ctx, |ui| {
+            // View mode toggle (above tabs)
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Vrm3D, "3D (VRM)");
+                ui.selectable_value(&mut self.view_mode, ViewMode::PngTuber2D, "2D (PNG)");
+            });
+            ui.separator();
+
             // Tab selector (Effects/Stickers only available in 3D mode)
             if self.view_mode != ViewMode::Vrm3D
                 && (self.controls_tab == ControlsTab::Effects
@@ -1208,12 +1216,6 @@ impl eframe::App for Fushigi3dApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
             match self.controls_tab {
             ControlsTab::General => {
-            // View mode toggle
-            ui.horizontal(|ui| {
-                ui.label("Mode:");
-                ui.selectable_value(&mut self.view_mode, ViewMode::Vrm3D, "3D (VRM)");
-                ui.selectable_value(&mut self.view_mode, ViewMode::PngTuber2D, "2D (PNG)");
-            });
 
             // Model picker
             if self.view_mode == ViewMode::Vrm3D {
