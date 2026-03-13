@@ -1061,9 +1061,20 @@ impl eframe::App for Fushigi3dApp {
         self.update_cached_state();
 
         while let Ok((slot_idx, is_active, path)) = self.file_pick_rx.try_recv() {
-            let path_str = path.display().to_string();
             let key = format!("slot_{}_{}", slot_idx, if is_active { "act" } else { "idle" });
-            if let Ok(bytes) = std::fs::read(&path) {
+            let png_dir = std::path::Path::new("assets/default/pngtuber");
+            if !png_dir.exists() {
+                let _ = std::fs::create_dir_all(png_dir);
+            }
+            let file_name = path.file_name().unwrap_or_default();
+            let dest = png_dir.join(file_name);
+            let src_canon = std::fs::canonicalize(&path).ok();
+            let dst_canon = std::fs::canonicalize(&dest).ok();
+            if src_canon != dst_canon || dst_canon.is_none() {
+                let _ = std::fs::copy(&path, &dest);
+            }
+            let stored_path = dest.to_string_lossy().to_string();
+            if let Ok(bytes) = std::fs::read(&dest) {
                 if let Ok(img) = image::load_from_memory(&bytes) {
                     let rgba = img.to_rgba8();
                     let size = [rgba.width() as usize, rgba.height() as usize];
@@ -1073,9 +1084,9 @@ impl eframe::App for Fushigi3dApp {
                     self.png_textures.insert(key, texture);
                     let slot = &mut self.png_slots[slot_idx];
                     if is_active {
-                        slot.active = Some(path_str);
+                        slot.active = Some(stored_path);
                     } else {
-                        slot.inactive = Some(path_str);
+                        slot.inactive = Some(stored_path);
                     }
                 }
             }
