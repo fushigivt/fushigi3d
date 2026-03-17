@@ -302,6 +302,7 @@ pub struct Fushigi3dApp {
     selected_slot: usize,
     file_pick_rx: std::sync::mpsc::Receiver<(usize, bool, std::path::PathBuf)>,
     file_pick_tx: std::sync::mpsc::Sender<(usize, bool, std::path::PathBuf)>,
+    vmc_port_buf: String,
 }
 
 impl Fushigi3dApp {
@@ -443,6 +444,7 @@ impl Fushigi3dApp {
             selected_slot: persisted.selected_slot.min(PNG_SLOT_COUNT - 1),
             file_pick_rx,
             file_pick_tx,
+            vmc_port_buf: config.vmc.receiver_port.to_string(),
         };
 
         // Try to load VRM model and initialize renderer
@@ -1286,6 +1288,41 @@ impl eframe::App for Fushigi3dApp {
                 ui.selectable_value(&mut self.theme, catppuccin_egui::MACCHIATO, "Macchiato");
                 ui.selectable_value(&mut self.theme, catppuccin_egui::MOCHA, "Mocha");
             });
+
+            ui.separator();
+
+            {
+                let mut vmc_enabled = self.state.config.blocking_read().vmc.receiver_enabled;
+                let prev_enabled = vmc_enabled;
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut vmc_enabled, "Phone tracking (VMC)");
+                });
+                if vmc_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("Port:");
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.vmc_port_buf)
+                                .desired_width(60.0),
+                        );
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            if let Ok(port) = self.vmc_port_buf.parse::<u16>() {
+                                let state = self.state.clone();
+                                let rt = tokio::runtime::Handle::current();
+                                rt.spawn(async move {
+                                    state.config.write().await.vmc.receiver_port = port;
+                                });
+                            }
+                        }
+                    });
+                }
+                if vmc_enabled != prev_enabled {
+                    let state = self.state.clone();
+                    let rt = tokio::runtime::Handle::current();
+                    rt.spawn(async move {
+                        state.config.write().await.vmc.receiver_enabled = vmc_enabled;
+                    });
+                }
+            }
 
             ui.separator();
 
