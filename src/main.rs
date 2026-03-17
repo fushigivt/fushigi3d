@@ -511,12 +511,16 @@ async fn run_tracking_loop(
             result = receiver.process(&current) => {
                 match result {
                     Ok(Some(mut new_state)) => {
-                        if state.config.read().await.activation
-                            == fushigi3d::config::ActivationMode::Key
-                        {
+                        let config = state.config.read().await;
+                        if name == "MediaPipe" && config.vmc.receiver_enabled {
+                            new_state = current.clone()
+                                .with_body_landmarks(new_state.body_landmarks().clone());
+                        }
+                        if config.activation == fushigi3d::config::ActivationMode::Key {
                             let ks = state.key_speaking.load(std::sync::atomic::Ordering::Relaxed);
                             new_state = new_state.with_speaking(ks);
                         }
+                        drop(config);
                         if new_state != current {
                             state.update_avatar_state(new_state).await;
                         }
