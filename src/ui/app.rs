@@ -124,14 +124,14 @@ impl Default for StickersParams {
     }
 }
 
-/// PNGTuber image slot paths.
+/// PNGTuber image state paths.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct PngSlot {
     active: Option<String>,
     inactive: Option<String>,
 }
 
-/// Number of PNGTuber image slots (keys 1-9, 0).
+/// Number of PNGTuber image states (keys 1-9, 0).
 const PNG_SLOT_COUNT: usize = 10;
 
 /// Persisted UI state saved/restored by eframe's built-in persistence.
@@ -158,9 +158,9 @@ struct PersistedState {
     #[serde(default)]
     stickers: StickersParams,
     #[serde(default)]
-    png_slots: Vec<PngSlot>,
+    png_states: Vec<PngSlot>,
     #[serde(default)]
-    selected_slot: usize,
+    selected_state: usize,
 }
 
 impl Default for PersistedState {
@@ -183,8 +183,8 @@ impl Default for PersistedState {
             selected_vad: crate::config::VadProvider::default(),
             fx: FxParams::default(),
             stickers: StickersParams::default(),
-            png_slots: Vec::new(),
-            selected_slot: 0,
+            png_states: Vec::new(),
+            selected_state: 0,
         }
     }
 }
@@ -298,8 +298,8 @@ pub struct Fushigi3dApp {
     stickers: StickersParams,
     /// Active tab in the controls side panel
     controls_tab: ControlsTab,
-    png_slots: Vec<PngSlot>,
-    selected_slot: usize,
+    png_states: Vec<PngSlot>,
+    selected_state: usize,
     file_pick_rx: std::sync::mpsc::Receiver<(usize, bool, std::path::PathBuf)>,
     file_pick_tx: std::sync::mpsc::Sender<(usize, bool, std::path::PathBuf)>,
     vmc_port_buf: String,
@@ -436,12 +436,12 @@ impl Fushigi3dApp {
             fx: persisted.fx.clone(),
             stickers: persisted.stickers.clone(),
             controls_tab: ControlsTab::General,
-            png_slots: {
-                let mut slots = persisted.png_slots.clone();
-                slots.resize_with(PNG_SLOT_COUNT, PngSlot::default);
-                slots
+            png_states: {
+                let mut states = persisted.png_states.clone();
+                states.resize_with(PNG_SLOT_COUNT, PngSlot::default);
+                states
             },
-            selected_slot: persisted.selected_slot.min(PNG_SLOT_COUNT - 1),
+            selected_state: persisted.selected_state.min(PNG_SLOT_COUNT - 1),
             file_pick_rx,
             file_pick_tx,
             vmc_port_buf: config.vmc.receiver_port.to_string(),
@@ -455,22 +455,22 @@ impl Fushigi3dApp {
             app.view_mode = ViewMode::PngTuber2D;
         }
 
-        // Reload persisted slot textures
+        // Reload persisted state textures
         let ctx = cc.egui_ctx.clone();
-        let slots_snapshot: Vec<_> = app.png_slots.iter().enumerate()
-            .flat_map(|(idx, slot)| {
+        let states_snapshot: Vec<_> = app.png_states.iter().enumerate()
+            .flat_map(|(idx, state)| {
                 let mut v = Vec::new();
-                if let Some(p) = &slot.active {
-                    v.push((format!("slot_{}_act", idx), p.clone()));
+                if let Some(p) = &state.active {
+                    v.push((format!("state_{}_act", idx), p.clone()));
                 }
-                if let Some(p) = &slot.inactive {
-                    v.push((format!("slot_{}_idle", idx), p.clone()));
+                if let Some(p) = &state.inactive {
+                    v.push((format!("state_{}_idle", idx), p.clone()));
                 }
                 v
             })
             .collect();
-        for (key, path) in &slots_snapshot {
-            app.load_slot_texture(&ctx, key, path);
+        for (key, path) in &states_snapshot {
+            app.load_state_texture(&ctx, key, path);
         }
 
         app
@@ -713,30 +713,30 @@ impl Fushigi3dApp {
 
     /// Render the 2D PNGTuber sprite in the given UI region.
     fn show_pngtuber_panel(&mut self, ui: &mut egui::Ui) {
-        let idx = self.selected_slot;
+        let idx = self.selected_state;
         let is_speaking = self.cached_avatar.is_speaking();
 
-        let active_path = self.png_slots[idx].active.clone();
-        let inactive_path = self.png_slots[idx].inactive.clone();
+        let active_path = self.png_states[idx].active.clone();
+        let inactive_path = self.png_states[idx].inactive.clone();
 
         let (primary, fallback) = if is_speaking {
             ("act", "idle")
         } else {
             ("idle", "act")
         };
-        let primary_key = format!("slot_{}_{}", idx, primary);
-        let fallback_key = format!("slot_{}_{}", idx, fallback);
+        let primary_key = format!("state_{}_{}", idx, primary);
+        let fallback_key = format!("state_{}_{}", idx, fallback);
         let primary_path = if primary == "act" { &active_path } else { &inactive_path };
         let fallback_path = if fallback == "act" { &active_path } else { &inactive_path };
 
         let tex_key = if let Some(p) = primary_path {
             if !self.png_textures.contains_key(&primary_key) {
-                self.load_slot_texture(ui.ctx(), &primary_key, p);
+                self.load_state_texture(ui.ctx(), &primary_key, p);
             }
             Some(primary_key)
         } else if let Some(p) = fallback_path {
             if !self.png_textures.contains_key(&fallback_key) {
-                self.load_slot_texture(ui.ctx(), &fallback_key, p);
+                self.load_state_texture(ui.ctx(), &fallback_key, p);
             }
             Some(fallback_key)
         } else {
@@ -759,7 +759,7 @@ impl Fushigi3dApp {
     }
 
     /// Load an image file into the texture cache under the given key.
-    fn load_slot_texture(&mut self, ctx: &egui::Context, key: &str, path: &str) {
+    fn load_state_texture(&mut self, ctx: &egui::Context, key: &str, path: &str) {
         if let Ok(bytes) = std::fs::read(path) {
             if let Ok(img) = image::load_from_memory(&bytes) {
                 let rgba = img.to_rgba8();
@@ -772,12 +772,12 @@ impl Fushigi3dApp {
         }
     }
 
-    /// Default asset-key-based PNGTuber renderer (used when no slot images are assigned).
+    /// Default asset-key-based PNGTuber renderer (used when no state images are assigned).
     fn show_pngtuber_default(&mut self, ui: &mut egui::Ui) {
         let asset_manager = match &self.asset_manager {
             Some(am) => am,
             None => {
-                ui.colored_label(self.theme.red, "Assign images to slots in the panel");
+                ui.colored_label(self.theme.red, "Assign images to states in the panel");
                 return;
             }
         };
@@ -1048,8 +1048,8 @@ impl eframe::App for Fushigi3dApp {
             selected_vad: self.selected_vad,
             fx: self.fx.clone(),
             stickers: self.stickers.clone(),
-            png_slots: self.png_slots.clone(),
-            selected_slot: self.selected_slot,
+            png_states: self.png_states.clone(),
+            selected_state: self.selected_state,
         };
         eframe::set_value(storage, STORAGE_KEY, &persisted);
     }
@@ -1062,8 +1062,8 @@ impl eframe::App for Fushigi3dApp {
         // Drain latest state from broadcast channel
         self.update_cached_state();
 
-        while let Ok((slot_idx, is_active, path)) = self.file_pick_rx.try_recv() {
-            let key = format!("slot_{}_{}", slot_idx, if is_active { "act" } else { "idle" });
+        while let Ok((state_idx, is_active, path)) = self.file_pick_rx.try_recv() {
+            let key = format!("state_{}_{}", state_idx, if is_active { "act" } else { "idle" });
             let png_dir = std::path::Path::new("assets/default/pngtuber");
             if !png_dir.exists() {
                 let _ = std::fs::create_dir_all(png_dir);
@@ -1084,11 +1084,11 @@ impl eframe::App for Fushigi3dApp {
                     let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
                     let texture = ctx.load_texture(&key, color_image, egui::TextureOptions::LINEAR);
                     self.png_textures.insert(key, texture);
-                    let slot = &mut self.png_slots[slot_idx];
+                    let state = &mut self.png_states[state_idx];
                     if is_active {
-                        slot.active = Some(stored_path);
+                        state.active = Some(stored_path);
                     } else {
-                        slot.inactive = Some(stored_path);
+                        state.inactive = Some(stored_path);
                     }
                 }
             }
@@ -1175,7 +1175,7 @@ impl eframe::App for Fushigi3dApp {
             ];
             for (key, idx) in &digit_keys {
                 if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, *key)) {
-                    self.selected_slot = *idx;
+                    self.selected_state = *idx;
                 }
             }
         }
@@ -1370,9 +1370,9 @@ impl eframe::App for Fushigi3dApp {
             ui.label("Slots");
             let thumb = egui::vec2(28.0, 28.0);
             // Keyboard order: 1,2,...,9,0
-            let slot_order: [usize; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-            for &idx in &slot_order {
-                let selected = self.selected_slot == idx;
+            let state_order: [usize; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+            for &idx in &state_order {
+                let selected = self.selected_state == idx;
                 let resp = ui.horizontal(|ui| {
                     let label = egui::RichText::new(format!("{}", idx)).strong();
                     if selected {
@@ -1381,8 +1381,8 @@ impl eframe::App for Fushigi3dApp {
                         ui.label(label);
                     }
 
-                    let act_key = format!("slot_{}_act", idx);
-                    let idle_key = format!("slot_{}_idle", idx);
+                    let act_key = format!("state_{}_act", idx);
+                    let idle_key = format!("state_{}_idle", idx);
 
                     // Active thumbnail
                     if let Some(tex) = self.png_textures.get(&act_key) {
@@ -1435,7 +1435,7 @@ impl eframe::App for Fushigi3dApp {
                 }
 
                 // Handle image picker click — spawn async file dialog
-                if let Some((slot_idx, is_active)) = resp.inner {
+                if let Some((state_idx, is_active)) = resp.inner {
                     let tx = self.file_pick_tx.clone();
                     let ctx = ui.ctx().clone();
                     std::thread::spawn(move || {
@@ -1443,7 +1443,7 @@ impl eframe::App for Fushigi3dApp {
                             .add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif"])
                             .pick_file()
                         {
-                            let _ = tx.send((slot_idx, is_active, path));
+                            let _ = tx.send((state_idx, is_active, path));
                             ctx.request_repaint();
                         }
                     });
