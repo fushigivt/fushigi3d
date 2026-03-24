@@ -89,6 +89,18 @@ idle_scene = "Idle"
 speaking_scene = "Speaking"
 ```
 
+## Phone Face Tracking
+
+1. Install a VMC-compatible app on your phone (e.g. MeowFace)
+2. In the phone app, set the destination IP to your PC's local IP and port `39539`
+ (or change it via interface).
+
+```toml
+[vmc]
+receiver_enabled = true
+receiver_port = 39539
+```
+
 ## Development
 
 ```bash
